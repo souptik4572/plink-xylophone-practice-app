@@ -17,6 +17,9 @@ export interface Health {
   tabpfn: boolean
   session_minutes: number
   drill_target: number
+  child_name: string
+  home_language: string
+  speech_lang: string
 }
 
 export const getHealth = () => call<Health>('/api/health')
@@ -49,3 +52,58 @@ export interface Drill {
 
 export const nextDrill = (sessionId: number, songId: string) =>
   call<Drill>(`/api/next-drill?session_id=${sessionId}&song_id=${encodeURIComponent(songId)}`)
+
+export interface NewSong {
+  title: string
+  source: 'played' | 'hummed' | 'typed'
+  bars: number[]
+  beats: number[]
+}
+
+export const createSong = (song: NewSong) => post<ApiSong>('/api/songs', song)
+
+export const buildLesson = (songId: string, lyric = '') =>
+  post<ApiSong & { lesson_source: 'gemma' | 'fallback'; seconds: number }>(
+    `/api/songs/${encodeURIComponent(songId)}/lesson`,
+    { lyric },
+  )
+
+export interface SessionStats {
+  phrases: number
+  notes: number
+  first_try_pct: number
+  replays: number
+  minutes: number
+  avg_response_ms: number
+}
+
+export interface WeakJump {
+  from: string
+  to: string
+  expected: number
+  source: 'tabpfn' | 'observed'
+}
+
+export interface ParentNote {
+  note: string
+  source: 'gemma' | 'fallback'
+  seconds: number
+  stats: SessionStats
+  weakest_jumps: WeakJump[]
+}
+
+export const writeParentNote = (sessionId: number) => post<ParentNote>(`/api/sessions/${sessionId}/parent-note`, {})
+
+export interface SessionSummary {
+  id: number
+  player: string
+  started_at: string
+  stats: SessionStats
+  parent_note: string | null
+}
+
+export const listSessions = () => call<SessionSummary[]>('/api/sessions')
+
+export const getPraise = () => post<{ lines: string[]; source: string }>('/api/praise', {})
+
+export const deleteAllData = () => call<{ deleted: boolean }>('/api/data', { method: 'DELETE' })

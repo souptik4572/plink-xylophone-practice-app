@@ -1,5 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
-import { getHealth, listSongs, nextDrill, postAttempts, startSession, type Drill } from '../api'
+import {
+  getHealth,
+  getPraise,
+  listSongs,
+  nextDrill,
+  postAttempts,
+  startSession,
+  writeParentNote,
+  type Drill,
+  type ParentNote,
+} from '../api'
 import { audioConfig } from '../audio/audioConfig'
 import { listenForBars } from '../audio/mic'
 import { getAudioContext, playTone } from '../audio/synth'
@@ -32,6 +42,7 @@ export function Play({ instrument }: { instrument: Instrument }) {
   const [loadError, setLoadError] = useState(false)
   const [songId, setSongId] = useState('twinkle')
   const [source, setSource] = useState<Source>('onscreen')
+  const [tester, setTester] = useState(false)
   const [stage, setStage] = useState<Stage>('setup')
   const [turn, setTurn] = useState<Turn | null>(null)
   const [progress, setProgress] = useState(0)
@@ -39,6 +50,10 @@ export function Play({ instrument }: { instrument: Instrument }) {
   const [stats, setStats] = useState({ phrases: 0, notes: 0, firstTry: 0 })
   const [error, setError] = useState('')
   const [drill, setDrill] = useState<Drill | null>(null)
+  const [note, setNote] = useState<ParentNote | 'writing' | null>(null)
+  const praise = useRef(DEFAULT_PRAISE)
+  /** Rows not yet saved; the parent note waits for them. */
+  const pendingSave = useRef<Promise<unknown>>(Promise.resolve())
 
   const session = useRef<{ id: number; start: number; minutes: number } | null>(null)
   const run = useRef<PhraseRun | null>(null)
@@ -123,9 +138,15 @@ export function Play({ instrument }: { instrument: Instrument }) {
     setError('')
     getAudioContext() // this click is the user gesture that unlocks audio
     try {
-      const [s, health] = await Promise.all([startSession('child'), getHealth()])
+      const [s, health] = await Promise.all([startSession(tester ? 'tester' : 'child'), getHealth()])
       session.current = { id: s.id, start: performance.now(), minutes: health.session_minutes }
       setStats({ phrases: 0, notes: 0, firstTry: 0 })
+      setNote(null)
+      // Gemma writes this session's praise in the background; the defaults cover the first phrase.
+      praise.current = DEFAULT_PRAISE
+      getPraise()
+        .then((p) => (praise.current = p.lines))
+        .catch(() => {})
       if (source === 'mic') {
         stopMic.current = await listenForBars(
           instrument.noise_floor!,
@@ -138,7 +159,20 @@ export function Play({ instrument }: { instrument: Instrument }) {
     }
   }
 
+  const requestNote = async (sessionId: number) => {
+    setNote('writing')
+    await pendingSave.current
+    try {
+      setNote(await writeParentNote(sessionId))
+    } catch {
+      setNote(null)
+    }
+  }
+
   const finish = () => {
+    const s = session.current
+    // Ended early: the note is still written and kept for the Parent screen.
+    if (s && stats.phrases > 0 && note === null) void requestNote(s.id)
     clearTimeout(hintTimer.current)
     stopMic.current?.()
     stopMic.current = null
@@ -167,12 +201,15 @@ export function Play({ instrument }: { instrument: Instrument }) {
       notes: st.notes + rows.length,
       firstTry: st.firstTry + rows.filter((x) => x.first_try_correct).length,
     }))
-    postAttempts(rows).catch((e) => setError(`Could not save this phrase: ${e instanceof Error ? e.message : e}`))
+    pendingSave.current = postAttempts(rows).catch((e) =>
+      setError(`Could not save this phrase: ${e instanceof Error ? e.message : e}`),
+    )
     celebrate(true)
-    say(pick(DEFAULT_PRAISE))
+    say(pick(praise.current))
     const s = session.current!
     const over = performance.now() - s.start >= s.minutes * 60000
     setStage(over ? 'sessionDone' : 'phraseDone')
+    if (over) void requestNote(s.id)
   }
 
   const accepts = (s: BarStrike) =>
@@ -286,6 +323,10 @@ export function Play({ instrument }: { instrument: Instrument }) {
               {!calibrated && ' (calibrate it on the Parent screen first)'}
             </label>
           </fieldset>
+          <label className="toggle muted">
+            <input type="checkbox" checked={tester} onChange={(e) => setTester(e.target.checked)} />
+            A grown-up is testing (not counted in her progress)
+          </label>
           <button type="button" className="primary" onClick={start} disabled={!songs}>
             Start
           </button>
@@ -367,6 +408,20 @@ export function Play({ instrument }: { instrument: Instrument }) {
           <button type="button" className="huge" onClick={finish}>
             Finish
           </button>
+          <aside className="note" aria-live="polite">
+            <h3>For the grown-up</h3>
+            {note === 'writing' && <p className="muted">Gemma is writing today's note…</p>}
+            {note && note !== 'writing' && (
+              <>
+                <p>{note.note}</p>
+                <p className="muted small">
+                  {note.source === 'gemma' ? `Written by Gemma in ${note.seconds}s` : 'Gemma was unavailable; a plain summary'}
+                  {note.weakest_jumps.length > 0 &&
+                    ` · trickiest jumps: ${note.weakest_jumps.map((w) => `${w.from}→${w.to}`).join(', ')}`}
+                </p>
+              </>
+            )}
+          </aside>
         </div>
       )}
 

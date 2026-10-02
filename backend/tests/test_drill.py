@@ -97,3 +97,43 @@ def test_choose_handles_a_single_phrase():
 
 def test_choose_breaks_ties_in_song_order():
     assert choose([0.7, 0.9, 0.7], exclude=None, target=0.8) == 0
+
+
+from app.drill import weakest_jumps  # noqa: E402
+from app.features import session_stats  # noqa: E402
+
+LABELS = ["C", "D", "E", "F", "G", "A", "B", "C′"]
+
+
+def test_weakest_jumps_from_the_model_are_the_biggest_here():
+    weak = weakest_jumps(history(200), LABELS, k=2, model=JumpModel)
+    assert len(weak) == 2
+    assert all(w["source"] == "tabpfn" for w in weak)
+    assert weak[0]["expected"] <= weak[1]["expected"]
+    assert {(w["from"], w["to"]) for w in weak} <= {("C", "C′"), ("C′", "C")}
+
+
+def test_weakest_jumps_at_cold_start_use_observed_miss_rates():
+    rows = []
+    for ok in [False, False, True]:
+        rows.append({**history(1).iloc[0].to_dict(), "prev_bar": 0.0, "target_bar": 4, "first_try_correct": ok})
+    for ok in [True, True, True]:
+        rows.append({**history(1).iloc[0].to_dict(), "prev_bar": 1.0, "target_bar": 2, "first_try_correct": ok})
+    weak = weakest_jumps(pd.DataFrame(rows), LABELS, k=1, model=JumpModel)
+    assert weak == [{"from": "C", "to": "G", "expected": pytest.approx(2 / 5), "source": "observed"}]
+
+
+def test_no_jumps_yet():
+    assert weakest_jumps(history(0), LABELS, model=JumpModel) == []
+
+
+def test_session_stats():
+    rows = history(8).to_dict("records")
+    for i, r in enumerate(rows):
+        r["response_ms"] = 1000 + i * 100
+        r["replays_before"] = 1 if r["pos_in_phrase"] == 0 else 0
+    stats = session_stats(rows)
+    assert stats["phrases"] == 2 and stats["notes"] == 8
+    assert stats["replays"] == 2
+    assert stats["first_try_pct"] == round(100 * sum(r["first_try_correct"] for r in rows) / 8)
+    assert stats["avg_response_ms"] == 1350

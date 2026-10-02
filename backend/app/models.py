@@ -72,6 +72,11 @@ def bar_offsets(db: Session) -> list[int]:
     return [b["semitone_offset"] for b in row.bars] if row else config.DEFAULT_OFFSETS
 
 
+def bar_labels(db: Session) -> list[str]:
+    row = db.get(InstrumentRow, 1)
+    return [b["label"] for b in row.bars] if row else config.DEFAULT_LABELS
+
+
 def song_phrases(song: Song) -> list[dict[str, Any]]:
     """Gemma's lesson if built, else fixed four-note phrases."""
     return song.phrases or fallback_phrases(len(parse_notes(song.notes)))

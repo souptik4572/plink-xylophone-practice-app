@@ -13,14 +13,15 @@ from pydantic import BaseModel, Field
 from sqlmodel import Session, col, func, select
 
 from app import config
-from app import drill
-from app.features import derive_columns
+from app import coach, drill
+from app.features import FEATURES, LABEL, derive_columns, frame, session_stats
 from app.fitter import REFERENCE_MIDI, fit_song, midi_to_name, parse_notes
 from app.models import (
     Attempt,
     InstrumentRow,
     PracticeSession,
     Song,
+    bar_labels,
     bar_offsets,
     engine,
     get_session,
@@ -65,10 +66,11 @@ def health() -> dict:
         "tabpfn": tabpfn,
         "session_minutes": config.SESSION_MINUTES,
         "drill_target": config.DRILL_TARGET,
+        "child_name": config.CHILD_NAME,
+        "home_language": config.HOME_LANGUAGE,
+        "speech_lang": config.SPEECH_LANG,
     }
 
-
-# ---------- Instrument ----------
 
 
 class BarIn(BaseModel):
@@ -104,8 +106,6 @@ def put_instrument(body: InstrumentIn, db: SessionDep) -> dict[str, Any]:
     db.commit()
     return {"bars": row.bars, "noise_floor": row.noise_floor}
 
-
-# ---------- Songs ----------
 
 
 def parse_or_422(notes: str) -> list[tuple[int, float]]:
@@ -177,6 +177,26 @@ def create_song(body: SongIn, db: SessionDep) -> dict[str, Any]:
     return song_out(song, offsets)
 
 
+class LessonIn(BaseModel):
+    lyric: str = Field(default="", max_length=500)
+
+
+@app.post("/api/songs/{song_id}/lesson")
+def build_lesson(song_id: str, body: LessonIn, db: SessionDep) -> dict[str, Any]:
+    song = db.get(Song, song_id)
+    if song is None:
+        raise HTTPException(404, "No such song")
+    parsed = parse_notes(song.notes)
+    bars = fit_song([m for m, _ in parsed], bar_offsets(db)).bars
+    lesson = coach.build_lesson(bars, [b for _, b in parsed], bar_labels(db), body.lyric)
+    if lesson.source == "gemma":
+        song.phrases = lesson.phrases
+        db.add(song)
+        db.commit()
+        drill.clear_cache()
+    return {**song_out(song, bar_offsets(db)), "lesson_source": lesson.source, "seconds": round(lesson.seconds, 1)}
+
+
 class FitIn(BaseModel):
     notes: str
 
@@ -185,8 +205,6 @@ class FitIn(BaseModel):
 def fit(body: FitIn, db: SessionDep) -> dict[str, Any]:
     return fit_out(parse_or_422(body.notes), bar_offsets(db))
 
-
-# ---------- Sessions and attempts ----------
 
 
 class SessionIn(BaseModel):
@@ -200,6 +218,61 @@ def start_session(body: SessionIn, db: SessionDep) -> dict[str, Any]:
     db.commit()
     db.refresh(s)
     return {"id": s.id, "player": s.player, "started_at": s.started_at.isoformat()}
+
+
+def child_history(db: Session):
+    rows = db.exec(select(Attempt).where(Attempt.player == "child")).all()
+    return frame([r.model_dump(include={*FEATURES, LABEL}) for r in rows]) if rows else frame([])
+
+
+@app.get("/api/sessions")
+def list_sessions(db: SessionDep, limit: int = 20) -> list[dict[str, Any]]:
+    out = []
+    for s in db.exec(select(PracticeSession).order_by(col(PracticeSession.id).desc()).limit(limit)).all():
+        rows = [r.model_dump() for r in db.exec(select(Attempt).where(Attempt.session_id == s.id)).all()]
+        if rows:
+            out.append({"id": s.id, "player": s.player, "started_at": s.started_at.isoformat(), "stats": session_stats(rows), "parent_note": s.parent_note})
+    return out
+
+
+@app.post("/api/sessions/{session_id}/parent-note")
+def write_parent_note(session_id: int, db: SessionDep) -> dict[str, Any]:
+    s = db.get(PracticeSession, session_id)
+    if s is None:
+        raise HTTPException(404, f"No session {session_id}")
+    rows = [r.model_dump() for r in db.exec(select(Attempt).where(Attempt.session_id == session_id)).all()]
+    if not rows:
+        raise HTTPException(409, "Nothing was played in this session")
+    stats = session_stats(rows)
+    weak = drill.weakest_jumps(child_history(db), bar_labels(db))
+    note = coach.parent_note(stats, weak, config.CHILD_NAME, config.HOME_LANGUAGE)
+    s.parent_note = note.text
+    db.add(s)
+    db.commit()
+    return {"note": note.text, "source": note.source, "seconds": round(note.seconds, 1), "stats": stats, "weakest_jumps": weak}
+
+
+@app.post("/api/praise")
+def praise(db: SessionDep) -> dict[str, Any]:
+    p = coach.praise_lines(config.CHILD_NAME, config.HOME_LANGUAGE)
+    return {"lines": p.lines, "source": p.source}
+
+
+@app.delete("/api/data")
+def delete_all_data(db: SessionDep) -> dict[str, bool]:
+    """The Parent screen's "delete all data": every attempt, session, added song and calibration."""
+    for model in (Attempt, PracticeSession, InstrumentRow):
+        for row in db.exec(select(model)).all():
+            db.delete(row)
+    for song in db.exec(select(Song)).all():
+        if song.source == "builtin":
+            song.phrases = None
+            db.add(song)
+        else:
+            db.delete(song)
+    db.commit()
+    drill.clear_cache()
+    return {"deleted": True}
 
 
 class AttemptIn(BaseModel):

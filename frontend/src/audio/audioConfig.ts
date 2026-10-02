@@ -77,4 +77,11 @@ export const audioConfig = {
     /** Pause after a right strike before the next target sounds, so the two don't clash. */
     nextNoteDelayMs: 450,
   },
+
+  /** Add a song, play it in (spec 7.7). */
+  addSong: {
+    /** Strikes closer than this are one bounce of the mallet, not two notes. */
+    minGapMs: 80,
+    maxBeats: 4,
+  },
 } as const

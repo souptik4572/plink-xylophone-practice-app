@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { getHealth, loadInstrument, type Health } from './api'
 import { DEFAULT_INSTRUMENT, type Instrument } from './instrument'
+import { setSpeechLang } from './voice'
+import { AddSong } from './screens/AddSong'
 import { FreePlay } from './screens/FreePlay'
 import { Parent } from './screens/Parent'
 import { Play } from './screens/Play'
@@ -8,6 +10,7 @@ import { Play } from './screens/Play'
 const SCREENS = [
   { id: 'play', label: 'Play' },
   { id: 'free', label: 'Free play' },
+  { id: 'add', label: 'Add a song' },
   { id: 'parent', label: 'Parent' },
 ] as const
 type ScreenId = (typeof SCREENS)[number]['id']
@@ -19,7 +22,10 @@ export default function App() {
 
   useEffect(() => {
     getHealth()
-      .then(setHealth)
+      .then((h) => {
+        setHealth(h)
+        setSpeechLang(h.speech_lang)
+      })
       .catch(() => setHealth(null))
     void loadInstrument().then((saved) => saved && setInstrument(saved))
   }, [])
@@ -48,7 +54,14 @@ export default function App() {
       <main>
         {screen === 'play' && <Play instrument={instrument} />}
         {screen === 'free' && <FreePlay instrument={instrument} />}
-        {screen === 'parent' && <Parent instrument={instrument} onInstrument={setInstrument} />}
+        {screen === 'add' && <AddSong instrument={instrument} onAdded={() => {}} />}
+        {screen === 'parent' && (
+          <Parent
+            instrument={instrument}
+            onInstrument={setInstrument}
+            onDeleted={() => setInstrument(DEFAULT_INSTRUMENT)}
+          />
+        )}
       </main>
 
       <footer className="status">

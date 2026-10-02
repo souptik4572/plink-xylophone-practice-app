@@ -152,3 +152,4 @@ backend/plink.db
 frontend/dist/
 frontend/public/basic-pitch/
 .DS_Store
+backend/logs/

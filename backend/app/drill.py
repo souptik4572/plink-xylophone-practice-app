@@ -69,7 +69,45 @@ def pick(history: pd.DataFrame, cands: list[Candidate], last: tuple[str, int] | 
     return Pick(cands[i].song_id, cands[i].phrase_idx, "tabpfn", expected[i], time.perf_counter() - t)
 
 
-# ---------- Wiring: once per phrase, off the request path ----------
+def weakest_jumps(history: pd.DataFrame, labels: list[str], k: int = 3, model=tabpfn_model) -> list[dict]:
+    """The bar-to-bar moves she is least likely to get right first time.
+
+    With enough rows, TabPFN predicts each jump she has met as a mid-phrase note;
+    before that, her observed success rates (smoothed, at least 3 tries) stand in.
+    """
+    if history.empty:
+        return []
+    moves = history.dropna(subset=["prev_bar"])
+    moves = moves[moves["prev_bar"] != moves["target_bar"]]
+    if moves.empty:
+        return []
+    pairs = moves.groupby(["prev_bar", "target_bar"])[LABEL].agg(["sum", "count"]).reset_index()
+
+    def named(prev, target, expected, source):
+        return {"from": labels[int(prev)], "to": labels[int(target)], "expected": float(expected), "source": source}
+
+    if len(history) < config.COLD_START_MIN_ROWS or history[LABEL].nunique() < 2:
+        seen = pairs[pairs["count"] >= 3].assign(rate=lambda d: (d["sum"] + 1) / (d["count"] + 2))
+        seen = seen.sort_values(["rate", "prev_bar", "target_bar"]).head(k)
+        return [named(r.prev_bar, r.target_bar, r.rate, "observed") for r in seen.itertuples()]
+
+    typical = {
+        "input_source": history["input_source"].mode()[0],
+        "times_seen_phrase": int(history["times_seen_phrase"].median()),
+        "mins_into_session": float(history["mins_into_session"].median()),
+    }
+    probe = pd.concat(
+        [
+            candidate_rows([int(p), int(t)], typical["times_seen_phrase"], typical["input_source"], typical["mins_into_session"]).iloc[[1]]
+            for p, t in zip(pairs["prev_bar"], pairs["target_bar"])
+        ],
+        ignore_index=True,
+    )
+    m = model().fit(history[FEATURES], history[LABEL].astype(int))
+    pairs["expected"] = m.predict_proba(probe[FEATURES])[:, list(m.classes_).index(1)]
+    worst = pairs.sort_values(["expected", "prev_bar", "target_bar"]).head(k)
+    return [named(r.prev_bar, r.target_bar, r.expected, "tabpfn") for r in worst.itertuples()]
+
 
 _lock = threading.Lock()
 _cache: dict[tuple[int, str | None], tuple[int, Pick]] = {}
@@ -107,7 +145,7 @@ def _compute(db: Session, session_id: int, song_id: str | None, last: Attempt | 
             cands.append(Candidate(song.id, i, rows))
 
     child = db.exec(select(Attempt).where(Attempt.player == "child")).all()
-    history = frame([r.model_dump(include={*FEATURES, LABEL}) for r in child]) if child else pd.DataFrame(columns=[*FEATURES, LABEL])
+    history = frame([r.model_dump(include={*FEATURES, LABEL}) for r in child])
     result = pick(history, cands, (last.song_id, last.phrase_idx) if last else None)
     if result.source == "tabpfn":
         log.info("TabPFN picked %s #%d (p=%.2f) in %.2fs on %d rows", result.song_id, result.phrase_idx, result.expected_success, result.seconds, len(history))

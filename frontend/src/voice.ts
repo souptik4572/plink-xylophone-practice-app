@@ -1,11 +1,18 @@
 // Spoken prompts through the browser's own speech engine: offline, no setup.
 
 let speaking = false
+let lang = ''
+
+/** The family's language for spoken prompts, as a BCP-47 tag (e.g. en-IN). Empty: browser default. */
+export function setSpeechLang(tag: string) {
+  lang = tag
+}
 
 export function say(text: string) {
   if (!('speechSynthesis' in window)) return
   speechSynthesis.cancel()
   const u = new SpeechSynthesisUtterance(text)
+  if (lang) u.lang = lang
   u.rate = 0.95
   u.pitch = 1.1
   u.onstart = () => (speaking = true)
