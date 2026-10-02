@@ -1,0 +1,322 @@
+:root {
+  --bg: #fdf6ec;
+  --panel: #ffffff;
+  --ink: #2b2a33;
+  --muted: #6b6878;
+  --line: #eadfce;
+  --accent: #3a86ff;
+  --wood-1: #c98b55;
+  --wood-2: #a86b3c;
+  --radius: 14px;
+  font-family: ui-rounded, system-ui, sans-serif;
+  color: var(--ink);
+  background: var(--bg);
+  -webkit-text-size-adjust: 100%;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+}
+
+button,
+select,
+input {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.app {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 16px;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.top h1 {
+  margin: 0;
+  font-size: 2rem;
+  letter-spacing: -0.02em;
+}
+
+.top h1 span {
+  color: #e5383b;
+}
+
+nav {
+  display: flex;
+  gap: 6px;
+}
+
+nav button,
+.replay button,
+.seg button {
+  border: 2px solid var(--line);
+  background: var(--panel);
+  border-radius: 999px;
+  padding: 8px 16px;
+  cursor: pointer;
+  min-height: 44px;
+}
+
+nav button.on,
+.seg button.on {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: #fff;
+}
+
+main {
+  flex: 1;
+}
+
+.screen {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.screen-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.screen-head h2 {
+  margin: 0;
+  font-size: 1.4rem;
+}
+
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.toggle input {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--ink);
+}
+
+.panel {
+  background: var(--panel);
+  border: 2px solid var(--line);
+  border-radius: var(--radius);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.song-pick {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+}
+
+.song-pick select {
+  border: 2px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: var(--bg);
+  min-height: 44px;
+}
+
+.replay {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.replay button.big {
+  background: var(--ink);
+  color: #fff;
+  border-color: var(--ink);
+  font-weight: 700;
+  min-width: 120px;
+}
+
+.replay button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.seg {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.status {
+  color: var(--muted);
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+/* ---------- The xylophone ---------- */
+
+.xylo {
+  --h: clamp(220px, 46vh, 400px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(6px, 1.2vw, 14px);
+  height: calc(var(--h) + 48px);
+  padding: 24px clamp(12px, 3vw, 32px);
+  border-radius: 22px;
+  background:
+    repeating-linear-gradient(95deg, transparent 0 14px, rgb(0 0 0 / 0.04) 14px 16px),
+    linear-gradient(180deg, var(--wood-1), var(--wood-2));
+  box-shadow:
+    inset 0 2px 0 rgb(255 255 255 / 0.25),
+    0 10px 24px rgb(80 50 20 / 0.25);
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  overflow-x: auto;
+}
+
+.bar {
+  --glow: transparent;
+  position: relative;
+  flex: 1 1 0;
+  min-width: 56px;
+  max-width: 104px;
+  height: calc(var(--h) * var(--bar-len));
+  border: none;
+  border-radius: 12px;
+  padding: 14px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  background:
+    linear-gradient(90deg, rgb(255 255 255 / 0.28), transparent 35%, transparent 70%, rgb(0 0 0 / 0.12)),
+    var(--bar-colour);
+  box-shadow:
+    0 6px 0 rgb(0 0 0 / 0.18),
+    0 0 0 0 var(--glow);
+  transition:
+    box-shadow 120ms ease,
+    filter 120ms ease,
+    transform 120ms ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.bar:focus-visible {
+  outline: 4px solid #fff;
+  outline-offset: 3px;
+}
+
+.nail {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #f4f4f4, #8d8d8d);
+  box-shadow: 0 1px 1px rgb(0 0 0 / 0.4);
+}
+
+.bar-label {
+  font-size: clamp(1.1rem, 2.6vw, 1.7rem);
+  font-weight: 800;
+  color: rgb(255 255 255 / 0.95);
+  text-shadow: 0 1px 2px rgb(0 0 0 / 0.35);
+  pointer-events: none;
+}
+
+.keycap {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 0.95rem;
+  font-weight: 700;
+  min-width: 30px;
+  padding: 3px 6px;
+  border-radius: 7px;
+  background: rgb(255 255 255 / 0.92);
+  color: var(--ink);
+  box-shadow: 0 2px 0 rgb(0 0 0 / 0.25);
+  pointer-events: none;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+}
+
+/* Replay highlights: the sounding bar and its key cap light together. */
+.bar.lit {
+  --glow: var(--bar-colour);
+  filter: brightness(1.18) saturate(1.15);
+  box-shadow:
+    0 6px 0 rgb(0 0 0 / 0.18),
+    0 0 0 6px #fff,
+    0 0 28px 10px var(--glow);
+  transform: translateY(-6px);
+}
+
+.bar.lit .keycap {
+  background: var(--ink);
+  color: #fff;
+}
+
+.bar.lit-muted {
+  filter: saturate(0.25) brightness(0.95);
+  box-shadow:
+    0 6px 0 rgb(0 0 0 / 0.18),
+    0 0 0 6px rgb(255 255 255 / 0.6);
+}
+
+.bar.lit-misfit::after {
+  content: '≈';
+  position: absolute;
+  top: -30px;
+  font-weight: 800;
+  color: #fff;
+}
+
+/* The next bar: a faint cue. */
+.bar.cue {
+  box-shadow:
+    0 6px 0 rgb(0 0 0 / 0.18),
+    0 0 0 4px rgb(255 255 255 / 0.55);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bar,
+  .keycap {
+    transition: none;
+  }
+  .bar.lit {
+    transform: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .xylo {
+    justify-content: flex-start;
+  }
+}
