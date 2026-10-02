@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, create_engine
 from sqlmodel.pool import StaticPool
 
-from app import models
+from app import drill, models
 from app.main import app, seed_builtin_songs
 
 
@@ -23,5 +23,6 @@ def client(engine):
             yield s
 
     app.dependency_overrides[models.get_session] = session
+    drill.clear_cache()
     yield TestClient(app)
     app.dependency_overrides.clear()

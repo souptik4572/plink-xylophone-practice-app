@@ -2,21 +2,31 @@
 
 import importlib.util
 import json
+import threading
 import uuid
 from contextlib import asynccontextmanager
 from typing import Annotated, Any, Literal
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from sqlmodel import Session, col, func, select
 
 from app import config
-from app.coach import fallback_phrases
-from app.drill import next_in_song_order
+from app import drill
 from app.features import derive_columns
 from app.fitter import REFERENCE_MIDI, fit_song, midi_to_name, parse_notes
-from app.models import Attempt, InstrumentRow, PracticeSession, Song, engine, get_session, init_db
+from app.models import (
+    Attempt,
+    InstrumentRow,
+    PracticeSession,
+    Song,
+    bar_offsets,
+    engine,
+    get_session,
+    init_db,
+    song_phrases,
+)
 
 
 def seed_builtin_songs(db: Session) -> None:
@@ -31,6 +41,7 @@ async def lifespan(_: FastAPI):
     init_db()
     with Session(engine) as db:
         seed_builtin_songs(db)
+    threading.Thread(target=drill.warm_up, daemon=True).start()
     yield
 
 
@@ -94,11 +105,6 @@ def put_instrument(body: InstrumentIn, db: SessionDep) -> dict[str, Any]:
     return {"bars": row.bars, "noise_floor": row.noise_floor}
 
 
-def bar_offsets(db: Session) -> list[int]:
-    row = db.get(InstrumentRow, 1)
-    return [b["semitone_offset"] for b in row.bars] if row else config.DEFAULT_OFFSETS
-
-
 # ---------- Songs ----------
 
 
@@ -131,7 +137,7 @@ def song_out(song: Song, offsets: list[int]) -> dict[str, Any]:
         "source": song.source,
         "notes": song.notes,
         **fit_out(parsed, offsets),
-        "phrases": song.phrases or fallback_phrases(len(parsed)),
+        "phrases": song_phrases(song),
         "lesson": "gemma" if song.phrases else "fallback",
     }
 
@@ -218,7 +224,7 @@ class AttemptsIn(BaseModel):
 
 
 @app.post("/api/attempts")
-def add_attempts(body: AttemptsIn, db: SessionDep) -> dict[str, int]:
+def add_attempts(body: AttemptsIn, db: SessionDep, background: BackgroundTasks) -> dict[str, int]:
     seen: dict[tuple[str, int], int] = {}
     for r in body.rows:
         session = db.get(PracticeSession, r.session_id)
@@ -241,22 +247,17 @@ def add_attempts(body: AttemptsIn, db: SessionDep) -> dict[str, int]:
             )
         )
     db.commit()
+    last = body.rows[-1]
+    background.add_task(drill.refresh, db.get_bind(), last.session_id, last.song_id)
     return {"inserted": len(body.rows)}
 
 
 @app.get("/api/next-drill")
 def next_drill(session_id: int, db: SessionDep, song_id: str | None = None) -> dict[str, Any]:
-    last = db.exec(
-        select(Attempt).where(Attempt.session_id == session_id).order_by(col(Attempt.id).desc()).limit(1)
-    ).first()
-    song = db.get(Song, song_id or (last.song_id if last else "twinkle"))
-    if song is None:
-        raise HTTPException(404, "No such song")
-    phrases = song.phrases or fallback_phrases(len(parse_notes(song.notes)))
-    last_phrase = last.phrase_idx if last and last.song_id == song.id else None
-    return {
-        "song_id": song.id,
-        "phrase_idx": next_in_song_order(len(phrases), last_phrase),
-        "source": "fallback",
-        "expected_success": None,
-    }
+    if db.get(PracticeSession, session_id) is None:
+        raise HTTPException(404, f"No session {session_id}")
+    try:
+        p = drill.next_drill(db, session_id, song_id)
+    except LookupError as e:
+        raise HTTPException(404, "No such song") from e
+    return {"song_id": p.song_id, "phrase_idx": p.phrase_idx, "source": p.source, "expected_success": p.expected_success}

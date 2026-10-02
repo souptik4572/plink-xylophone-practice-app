@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { getHealth, listSongs, nextDrill, postAttempts, startSession } from '../api'
+import { getHealth, listSongs, nextDrill, postAttempts, startSession, type Drill } from '../api'
 import { audioConfig } from '../audio/audioConfig'
 import { listenForBars } from '../audio/mic'
 import { getAudioContext, playTone } from '../audio/synth'
@@ -38,6 +38,7 @@ export function Play({ instrument }: { instrument: Instrument }) {
   const [lastTurn, setLastTurn] = useState<{ bar: number; t: number; correct: boolean }[]>([])
   const [stats, setStats] = useState({ phrases: 0, notes: 0, firstTry: 0 })
   const [error, setError] = useState('')
+  const [drill, setDrill] = useState<Drill | null>(null)
 
   const session = useRef<{ id: number; start: number; minutes: number } | null>(null)
   const run = useRef<PhraseRun | null>(null)
@@ -109,9 +110,10 @@ export function Play({ instrument }: { instrument: Instrument }) {
     const s = session.current
     if (!s || !songs) return
     try {
-      const drill = await nextDrill(s.id, songId)
-      const song = songs.find((x) => x.id === drill.song_id) ?? songs.find((x) => x.id === songId)!
-      beginPhrase(song, drill.phrase_idx)
+      const d = await nextDrill(s.id, songId)
+      setDrill(d)
+      const song = songs.find((x) => x.id === d.song_id) ?? songs.find((x) => x.id === songId)!
+      beginPhrase(song, d.phrase_idx)
     } catch (e) {
       setError(`Could not reach the local server: ${e instanceof Error ? e.message : e}`)
     }
@@ -326,6 +328,14 @@ export function Play({ instrument }: { instrument: Instrument }) {
             🔊 Hear it again
           </button>
           {turn?.phrase.tip && <p className="muted tip">{turn.phrase.tip}</p>}
+          {drill && (
+            <p className="muted tip picked-by">
+              {turn?.phrase.nickname} ·{' '}
+              {drill.source === 'tabpfn'
+                ? `chosen by TabPFN: about ${Math.round((drill.expected_success ?? 0) * 100)}% likely right first time`
+                : 'in song order: not enough practice yet for TabPFN to choose'}
+            </p>
+          )}
         </div>
       )}
 

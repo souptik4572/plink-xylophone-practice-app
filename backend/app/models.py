@@ -7,6 +7,8 @@ from sqlalchemy import JSON, Column
 from sqlmodel import Field, Session, SQLModel, create_engine
 
 from app import config
+from app.coach import fallback_phrases
+from app.fitter import parse_notes
 
 
 def _now() -> datetime:
@@ -63,6 +65,16 @@ class Attempt(SQLModel, table=True):
     wrong_before_correct: int
     first_try_correct: bool
     created_at: datetime = Field(default_factory=_now)
+
+
+def bar_offsets(db: Session) -> list[int]:
+    row = db.get(InstrumentRow, 1)
+    return [b["semitone_offset"] for b in row.bars] if row else config.DEFAULT_OFFSETS
+
+
+def song_phrases(song: Song) -> list[dict[str, Any]]:
+    """Gemma's lesson if built, else fixed four-note phrases."""
+    return song.phrases or fallback_phrases(len(parse_notes(song.notes)))
 
 
 engine = create_engine(f"sqlite:///{config.DB_PATH}", connect_args={"check_same_thread": False})

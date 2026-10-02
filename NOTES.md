@@ -48,3 +48,12 @@ The user chose to defer the milestone 2 gate ("let us focus on the overall imple
 - Broke (caught in review, not in use): a strike in the 450 ms gap between a right note and the next target would have been scored against the next note with a negative response time. Strikes are now ignored until the next target is presented.
 - Self-mute now covers the app's spoken hints too, not only its tones.
 - Tests: 85 pytest, 48 vitest. The API path was exercised against the live SQLite file and the test rows removed. The Play screen UI itself has not been clicked through in a browser yet.
+
+## Milestone 4 — TabPFN drill picker and benchmark (Fri 2 Oct)
+
+- Built: `app/drill.py` fits `TabPFNClassifier` on all `child` rows (raw DataFrame: `input_source` stays a string and `prev_bar` is NaN at phrase starts; no encoding or scaling), builds each candidate phrase's rows "as if she played it next", averages `predict_proba`, and picks the phrase closest to `DRILL_TARGET` (0.80), never the one just played. Cold start (< 60 rows or one class) walks song order. The Play screen says which picker chose the phrase.
+- Off the live loop: each phrase's `POST /api/attempts` schedules a background refresh, cached per session and latest attempt, so `GET /api/next-drill` usually returns a pick computed while she was celebrating. TabPFN warms up in a thread at server start.
+- Numbers: TabPFN fit plus predict of 40 candidate rows on a 400-row table takes **4.2 s cold, 0.8 s warm** on this Mac (MPS available). `input_source` as a raw string column works with no encoding.
+- Benchmark (`make eval`): leave-one-session-out, predictions pooled across held-out sessions, against majority class, a per-jump miss-rate lookup and logistic regression. **No real sessions yet**, so it says so. The `--synthetic` smoke test (12 simulated sessions, 770 rows, 87 % first-try) gave TabPFN 0.649 vs logistic regression 0.651 ROC AUC, a tie, with both above the jump lookup (0.576). This is a simulated child and must not be quoted as hers.
+- Broke: the drill cache was keyed by session id, and SQLite can reuse ids after "delete all data" (and in each test database). Added `clear_cache()`.
+- Tests: 93 pytest (including one end-to-end test through real TabPFN, about 3 s), 48 vitest.

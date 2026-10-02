@@ -21,7 +21,7 @@ test:
 	cd frontend && pnpm test
 
 eval:
-	cd backend && uv run python -m eval.eval_drill_picker
+	cd backend && uv run python -m eval.eval_drill_picker $(ARGS)
 
 check:
 	cd backend && uv run python -m eval.check_models
