@@ -66,6 +66,8 @@ class Attempt(SQLModel, table=True):
     first_try_correct: bool
     # How much help the game gave: lots (only the target sounds), some (glow + hints), little (glow only if stuck).
     help_level: str = "some"
+    # TabPFN's first-try prediction for this note when the part was picked (not a feature): for calibration.
+    predicted_success: float | None = None
     created_at: datetime = Field(default_factory=_now)
 
 
@@ -99,6 +101,14 @@ def bar_labels(db: Session) -> list[str]:
     return [b["label"] for b in row.bars] if row else config.DEFAULT_LABELS
 
 
+def bar_legend(db: Session) -> list[dict[str, Any]]:
+    """Her bars with colour names, for reading song cards. Older saves lack names; the colours give them back."""
+    row = db.get(InstrumentRow, 1)
+    if row is None:
+        return [{"label": lab, "colour_name": name} for lab, name in zip(config.DEFAULT_LABELS, config.DEFAULT_COLOURS.values())]
+    return [{"label": b["label"], "colour_name": b.get("colour_name") or config.DEFAULT_COLOURS.get(b["colour"].lower())} for b in row.bars]
+
+
 def song_phrases(song: Song) -> list[dict[str, Any]]:
     """Gemma's lesson if built, else fixed four-note phrases."""
     return song.phrases or fallback_phrases(len(parse_notes(song.notes)))
@@ -110,7 +120,7 @@ engine = create_engine(f"sqlite:///{config.DB_PATH}", connect_args={"check_same_
 # Columns added after the first release. create_all makes new tables but never
 # alters old ones, so an existing plink.db gains these here, with safe defaults.
 ADDED_COLUMNS = {
-    "attempt": [("help_level", "VARCHAR NOT NULL DEFAULT 'some'")],
+    "attempt": [("help_level", "VARCHAR NOT NULL DEFAULT 'some'"), ("predicted_success", "FLOAT")],
     "settings": [("help_level", "VARCHAR NOT NULL DEFAULT 'some'"), ("parent_gate", "BOOLEAN NOT NULL DEFAULT 1")],
 }
 

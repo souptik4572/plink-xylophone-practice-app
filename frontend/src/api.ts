@@ -1,5 +1,7 @@
 import type { Instrument } from './instrument'
 import type { AttemptRow } from './play/phraseRun'
+import type { ToolUse } from './kids/answer'
+import type { HelpAdvice } from './kids/help'
 import type { ApiSong } from './songs/songs'
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
@@ -60,6 +62,8 @@ export interface Drill {
   phrase_idx: number
   source: 'tabpfn' | 'fallback'
   expected_success: number | null
+  note_probs: number[] | null
+  rows_used: number
 }
 
 export const nextDrill = (sessionId: number, songId: string) =>
@@ -67,7 +71,7 @@ export const nextDrill = (sessionId: number, songId: string) =>
 
 export interface NewSong {
   title: string
-  source: 'played' | 'hummed' | 'typed'
+  source: 'played' | 'hummed' | 'typed' | 'photo'
   bars: number[]
   beats: number[]
 }
@@ -81,6 +85,20 @@ export interface Fit {
   fit_score: number
   transposition: number
 }
+
+export interface CardReading {
+  title: string
+  bars: number[]
+  beats: number[]
+  /** Notes where the printed symbol and the colour disagreed: worth a look. */
+  flagged: number[]
+  unreadable: number
+  counts: number[]
+  seconds: number
+}
+
+/** Gemma 4 vision reads a photo of a song card (sent only to this laptop's server, never stored). */
+export const readCard = (image: string) => post<CardReading>('/api/songs/read-card', { image })
 
 /** Place note names (any key) on her bars: the transposing fitter, spec 7.6. */
 export const fitNotes = (notes: string) => post<Fit>('/api/songs/fit', { notes })
@@ -142,3 +160,27 @@ export const getProgress = () => call<Progress>('/api/progress')
 export const getPraise = () => post<{ lines: string[]; source: string }>('/api/praise', {})
 
 export const deleteAllData = () => call<{ deleted: boolean }>('/api/data', { method: 'DELETE' })
+
+type Level = 'lots' | 'some' | 'little'
+
+export interface Insights {
+  source: 'tabpfn' | 'fallback'
+  rows_used: number
+  seconds?: number
+  songs: { song_id: string; by_level: Record<Level, number>; help: HelpAdvice }[]
+  rows_by_level?: Record<Level, number>
+  known_levels?: Level[]
+  help: (HelpAdvice & { basis_song: string }) | null
+}
+
+export const getInsights = () => call<Insights>('/api/insights')
+
+export interface AskReply {
+  answer: string
+  tools: ToolUse[]
+  seconds: number
+}
+
+/** A grown-up's question to Gemma, which answers by calling tools over her data and TabPFN. */
+export const askPlink = (question: string, history: { role: 'user' | 'assistant'; content: string }[]) =>
+  post<AskReply>('/api/ask', { question, history })

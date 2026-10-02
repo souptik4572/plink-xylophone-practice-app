@@ -60,7 +60,7 @@ def test_existing_database_gains_new_columns(tmp_path):
 
     eng = create_engine(f"sqlite:///{path}")
     models.init_db(eng)
-    assert "help_level" in {c["name"] for c in inspect(eng).get_columns("attempt")}
+    assert {"help_level", "predicted_success"} <= {c["name"] for c in inspect(eng).get_columns("attempt")}
     assert {"help_level", "parent_gate"} <= {c["name"] for c in inspect(eng).get_columns("settings")}
     with Session(eng) as db:
         assert db.get(Attempt, 1).help_level == "some"

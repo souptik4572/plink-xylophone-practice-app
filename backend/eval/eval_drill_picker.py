@@ -26,7 +26,8 @@ from app import config  # loads .env before tabpfn is imported
 from app.features import FEATURES, LABEL, frame
 from app.models import Attempt, engine
 
-NUMERIC = [f for f in FEATURES if f != "input_source"]
+CATEGORICAL = ["input_source", "help_level"]
+NUMERIC = [f for f in FEATURES if f not in CATEGORICAL]
 
 
 def majority(train: pd.DataFrame, test: pd.DataFrame) -> np.ndarray:
@@ -42,7 +43,7 @@ def jump_lookup(train: pd.DataFrame, test: pd.DataFrame) -> np.ndarray:
 def logistic(train: pd.DataFrame, test: pd.DataFrame) -> np.ndarray:
     prep = ColumnTransformer(
         [
-            ("src", OneHotEncoder(handle_unknown="ignore"), ["input_source"]),
+            ("cat", OneHotEncoder(handle_unknown="ignore"), CATEGORICAL),
             ("num", make_pipeline(SimpleImputer(strategy="constant", fill_value=-1, add_indicator=True), StandardScaler()), NUMERIC),
         ]
     )
@@ -73,6 +74,22 @@ def load_real() -> pd.DataFrame:
     df = frame([r.model_dump(include={*FEATURES, LABEL}) for r in rows])
     df["session_id"] = [r.session_id for r in rows]
     return df
+
+
+def calibration() -> str:
+    """How TabPFN's live per-note predictions compared with what she then did."""
+    with Session(engine) as db:
+        rows = db.exec(select(Attempt).where(Attempt.player == "child", Attempt.predicted_success != None)).all()  # noqa: E711
+    if len(rows) < 10:
+        return f"\nLive calibration: {len(rows)} notes played with a TabPFN prediction so far (need 10)."
+    p = np.array([r.predicted_success for r in rows])
+    y = np.array([r.first_try_correct for r in rows], dtype=float)
+    lines = [f"\nLive calibration on {len(rows)} notes: predicted {p.mean():.0%} first try, she got {y.mean():.0%}; Brier {np.mean((p - y) ** 2):.3f}."]
+    for lo, hi in [(0, 0.6), (0.6, 0.8), (0.8, 1.01)]:
+        m = (p >= lo) & (p < hi)
+        if m.any():
+            lines.append(f"  predicted {lo:.0%}-{min(hi, 1):.0%}: {m.sum()} notes, she got {y[m].mean():.0%}")
+    return "\n".join(lines)
 
 
 def evaluate(df: pd.DataFrame) -> tuple[str, dict[str, float]]:
@@ -121,11 +138,14 @@ def main() -> int:
         return 0
 
     table, _ = evaluate(df)
+    live = calibration() if not args.synthetic else ""
     print(f"Drill-picker benchmark: leave-one-session-out, {n_sessions} sessions, {len(df)} rows, "
           f"{df[LABEL].mean():.0%} first-try correct.")
     print(f"Data: {source}.\n")
     print(table)
     print("\nMajority class predicts one constant per held-out session, so its pooled ROC AUC is not meaningful.")
+    if live:
+        print(live)
     return 0
 
 

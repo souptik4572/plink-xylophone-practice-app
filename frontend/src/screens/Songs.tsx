@@ -1,18 +1,21 @@
-import { Headphones, Play, Plus, Sparkles, WandSparkles } from 'lucide-react'
+import { BrainCircuit, Headphones, Play, Plus, Sparkles, WandSparkles } from 'lucide-react'
 import { useState } from 'react'
 import { buildLesson } from '../api'
 import { useApp } from '../app/AppContext'
+import { useInsights } from '../app/useInsights'
 import { useSongs } from '../app/useSongs'
 import { cn, tone } from '../theme/palette'
 import { Deco } from '../ui/Deco'
 import { Button, Chip, ScreenTitle } from '../ui/ui'
 import { AddSong } from './AddSong'
 
-const SOURCE = { builtin: 'Built-in', played: 'Played in', hummed: 'Hummed', typed: 'Typed' } as Record<string, string>
+const SOURCE = { builtin: 'Built-in', played: 'Played in', hummed: 'Sung', typed: 'Typed', photo: 'From a photo' } as Record<string, string>
 
 export function Songs({ adding }: { adding: boolean }) {
-  const { instrument, navigate, serverUp } = useApp()
+  const { instrument, navigate, serverUp, settings } = useApp()
   const { songs, offline, setSongs } = useSongs()
+  const insights = useInsights()
+  const readiness = (id: string) => insights?.songs.find((s) => s.song_id === id)?.by_level[settings.help_level]
   const [building, setBuilding] = useState<string | null>(null)
   const [error, setError] = useState('')
 
@@ -91,6 +94,16 @@ export function Songs({ adding }: { adding: boolean }) {
                 )}
                 {s.misfits.length > 0 && <Chip t={3}>Almost fits</Chip>}
               </p>
+              {readiness(s.id) !== undefined && (
+                <p className="row small">
+                  <Chip
+                    t={readiness(s.id)! >= settings.drill_target ? 1 : readiness(s.id)! >= settings.drill_target - 0.2 ? 2 : 3}
+                    icon={<BrainCircuit aria-hidden />}
+                  >
+                    For her: {Math.round(readiness(s.id)! * 100)}% first try
+                  </Chip>
+                </p>
+              )}
               {s.lesson === 'gemma' && (
                 <p className="nicknames small">
                   {s.phrases

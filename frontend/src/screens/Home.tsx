@@ -1,7 +1,8 @@
-import { ArrowRight, Check, Flame, Heart, ListMusic, Mic, Music, Piano, Play, Sparkles, Target, Trophy } from 'lucide-react'
+import { ArrowRight, BrainCircuit, Check, Flame, Heart, ListMusic, Mic, Music, Piano, Play, Sparkles, Target, Trophy } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { getProgress, listSessions, type Progress, type SessionSummary } from '../api'
 import { useApp } from '../app/AppContext'
+import { useInsights } from '../app/useInsights'
 import { lastSongId, useSongs } from '../app/useSongs'
 import { isCalibrated } from '../instrument'
 import { Mascot } from '../kids/Mascot'
@@ -24,6 +25,7 @@ const HERO_DECO: DecoItem[] = [
 export function Home() {
   const { settings, instrument, serverUp, health, dataVersion } = useApp()
   const { songs } = useSongs()
+  const insights = useInsights()
   const [progress, setProgress] = useState<Progress | null>(null)
   const [latest, setLatest] = useState<SessionSummary | null>(null)
 
@@ -47,6 +49,13 @@ export function Home() {
   ]
   const setupDone = steps.slice(0, 3).every((s) => s.done)
   const jar = stickerProgress(progress?.stars ?? 0)
+  // The song whose expected first-try success sits closest to her sweet spot: mostly wins, a little stretch.
+  const pickId = insights?.songs.length
+    ? [...insights.songs].sort(
+        (a, b) =>
+          Math.abs(a.by_level[settings.help_level] - settings.drill_target) - Math.abs(b.by_level[settings.help_level] - settings.drill_target),
+      )[0].song_id
+    : null
 
   return (
     <div className="home">
@@ -152,6 +161,11 @@ export function Home() {
                     {s.misfits.length > 0 && <Chip t={3}>Almost fits</Chip>}
                     {s.lesson === 'gemma' && <Chip t={4} icon={<Sparkles aria-hidden />}>Lesson</Chip>}
                   </span>
+                  {s.id === pickId && (
+                    <Chip t={2} solid icon={<BrainCircuit aria-hidden />}>
+                      TabPFN’s pick today
+                    </Chip>
+                  )}
                 </a>
               </li>
             ))}

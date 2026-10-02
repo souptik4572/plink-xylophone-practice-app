@@ -23,9 +23,26 @@ make eval    # TabPFN drill-picker benchmark
 
 The Grown-ups area asks for a sum before opening, so little hands can't reach settings or "delete all data".
 
+## Where the open models work
+
+- **TabPFN** (Prior Labs), learning from her own practice log from about 20 notes in:
+  - chooses the next part at the level she'll get right about 80% of the time;
+  - brings help sooner on the notes it expects her to miss;
+  - advises more, less, or "try" a help level, but only for levels it has seen her play;
+  - rates every song for her;
+  - finds her trickiest jumps.
+- **Gemma 4** (`gemma4:e4b`, through Ollama):
+  - splits songs into named parts;
+  - writes praise and the note for you;
+  - **reads song cards from a photo**, using its vision locally;
+  - answers **Ask Plink** questions by calling tools over her data and TabPFN.
+- **Basic Pitch** (Spotify) turns singing into notes, in the browser.
+
+Detection of her real xylophone is plain signal processing, not a model.
+
 ## Adding songs
 
-Play it in on the bars, type note letters, or **sing or hum it**. Singing runs [Basic Pitch](https://github.com/spotify/basic-pitch-ts) in the browser from the model files this app serves, so the recording never leaves the tab.
+Play it in on the bars, type note letters, **sing or hum it**, or **photograph a song card**: Gemma counts the notes, then reads each one's number, letter or colour, and the code maps them to her bars and flags any it is unsure of. Singing runs [Basic Pitch](https://github.com/spotify/basic-pitch-ts) in the browser from the model files this app serves, so the recording never leaves the tab.
 
 Requires `uv`, `pnpm`, and [Ollama](https://ollama.com). Her name, the family's language and speaking voice, session length, and how much of a challenge the drill picker aims for are set in the app under **Grown-ups → Settings**; `.env` only supplies the first defaults. Open the app at `http://localhost:5173` on the same machine: the microphone needs a secure context, which `localhost` is and a LAN IP is not.
 

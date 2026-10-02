@@ -81,6 +81,20 @@ export const audioConfig = {
     /** How long a happy or hint face stays before the mascot goes back to waiting. */
     moodMs: 1200,
     /**
+     * Per-note help from TabPFN's prediction for each note: help comes sooner
+     * on notes she is likely to miss and holds back on ones she'll get.
+     */
+    adaptive: {
+      trickyBelow: 0.6,
+      easyFrom: 0.88,
+      trickyPromptFactor: 0.35,
+      easyPromptFactor: 1.6,
+      trickyHintAfterMs: 4000,
+      easyHintAfterMs: 11000,
+      /** On a tricky note Plink says the colour, even at "some help". */
+      sayColourWhenTricky: true,
+    },
+    /**
      * Help levels (fading prompts). Lots: errorless, only the target sounds, its
      * colour is spoken. Some: the spec's wait mode. Little: from memory, the glow
      * appears only after a pause or a miss.

@@ -48,6 +48,7 @@ describe('phrase run (wait mode)', () => {
       wrong_before_correct: 0,
       first_try_correct: true,
       help_level: 'some',
+      predicted_success: null,
     })
     expect(rows.map((r) => r.prev_bar)).toEqual([null, 3, 3, 2])
     expect(rows.map((r) => r.note_idx)).toEqual([7, 8, 9, 10])
@@ -130,5 +131,23 @@ describe('help levels', () => {
     run.present(0)
     run.strike(3, 'keyboard', 10)
     expect(run.rows()[0].help_level).toBe('some')
+  })
+})
+
+describe('TabPFN predictions', () => {
+  it('carries the per-note prediction into each row, for calibration', () => {
+    const run = createPhraseRun({ ...base, bars: [3, 2], predicted: [0.64, 0.91] })
+    run.present(0)
+    run.strike(3, 'keyboard', 100)
+    run.present(200)
+    run.strike(2, 'keyboard', 300)
+    expect(run.rows().map((r) => r.predicted_success)).toEqual([0.64, 0.91])
+  })
+
+  it('leaves it empty when TabPFN did not choose the part', () => {
+    const run = createPhraseRun({ ...base, bars: [3] })
+    run.present(0)
+    run.strike(3, 'keyboard', 10)
+    expect(run.rows()[0].predicted_success).toBeNull()
   })
 })

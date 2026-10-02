@@ -70,6 +70,25 @@ def test_candidate_rows_look_like_attempt_rows():
     assert set(rows["phrase_len"]) == {3} and set(rows["times_seen_phrase"]) == {3}
 
 
+def test_tabpfn_takes_over_early_once_she_has_hits_and_misses():
+    p = pick(history(config.COLD_START_MIN_ROWS), cands(SMOOTH, JUMPY, REPEAT), last=None, model=JumpModel)
+    assert config.COLD_START_MIN_ROWS <= 20
+    assert p.source == "tabpfn"
+    assert p.rows_used == config.COLD_START_MIN_ROWS
+
+
+def test_too_few_misses_is_still_cold_start():
+    h = history(40, both_classes=False)
+    h.loc[:1, "first_try_correct"] = False  # only two misses
+    assert pick(h, cands(SMOOTH, JUMPY), last=None, model=JumpModel).source == "fallback"
+
+
+def test_pick_returns_the_prediction_for_each_note_of_the_chosen_part():
+    p = pick(history(200), cands(JUMPY, SMOOTH, REPEAT), last=None, model=JumpModel)
+    assert p.phrase_idx == 1
+    assert p.note_probs == pytest.approx([0.95, 0.83, 0.83, 0.83])
+
+
 def test_cold_start_under_60_rows_walks_song_order():
     p = pick(history(config.COLD_START_MIN_ROWS - 1), cands(SMOOTH, JUMPY, REPEAT), last=("song", 0), model=JumpModel)
     assert (p.phrase_idx, p.source, p.expected_success) == (1, "fallback", None)
@@ -144,3 +163,32 @@ def test_target_is_a_parent_setting():
     # With target 0.95 the no-jump phrase wins; with 0.80 the smooth one does.
     assert pick(history(200), cands(JUMPY, SMOOTH, REPEAT), last=None, model=JumpModel, target=0.95).phrase_idx == 2
     assert pick(history(200), cands(JUMPY, SMOOTH, REPEAT), last=None, model=JumpModel, target=0.80).phrase_idx == 1
+
+
+def test_tabpfn_is_never_used_by_two_threads_at_once():
+    """PyTorch's GPU backend deadlocked with concurrent first use (three threads stuck
+    compiling a Metal kernel), so every TabPFN fit and predict is serialised."""
+    import threading
+    import time
+
+    inside, peak = [0], [0]
+    guard = threading.Lock()
+
+    class SlowModel(JumpModel):
+        def predict_proba(self, X):
+            with guard:
+                inside[0] += 1
+                peak[0] = max(peak[0], inside[0])
+            time.sleep(0.05)
+            with guard:
+                inside[0] -= 1
+            return super().predict_proba(X)
+
+    h = history(200)
+    threads = [threading.Thread(target=pick, args=(h, cands(SMOOTH, JUMPY), None, SlowModel)) for _ in range(4)]
+    threads += [threading.Thread(target=weakest_jumps, args=(h, LABELS, 3, SlowModel)) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert peak[0] == 1

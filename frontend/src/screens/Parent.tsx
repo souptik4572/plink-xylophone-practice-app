@@ -7,6 +7,7 @@ import {
   Ear,
   Flame,
   Heart,
+  MessageCircleQuestion,
   Mic,
   Music,
   PenLine,
@@ -28,6 +29,10 @@ import {
   type Settings,
 } from '../api'
 import { useApp } from '../app/AppContext'
+import { useInsights } from '../app/useInsights'
+import { AskPlink } from '../kids/AskPlink'
+import { adviceText, HELP } from '../kids/help'
+import { useSongs } from '../app/useSongs'
 import { cn } from '../theme/palette'
 import { Button, Card, Chip, Field, ScreenTitle, Switch } from '../ui/ui'
 import { say, setSpeechLang } from '../voice'
@@ -36,6 +41,7 @@ import { SelfTest } from './SelfTest'
 
 const TABS = [
   { id: 'progress', label: 'Progress', icon: ChartColumn },
+  { id: 'ask', label: 'Ask Plink', icon: MessageCircleQuestion },
   { id: 'settings', label: 'Settings', icon: SlidersHorizontal },
   { id: 'calibrate', label: 'Calibrate', icon: Mic },
   { id: 'mic', label: 'Mic check', icon: Ear },
@@ -44,6 +50,64 @@ const TABS = [
 type TabId = (typeof TABS)[number]['id']
 
 const LANGUAGES = ['English', 'Bengali', 'Hindi', 'Tamil', 'Telugu', 'Marathi', 'Kannada', 'Malayalam', 'Gujarati', 'Punjabi', 'Urdu', 'Spanish', 'French', 'German']
+
+function HelpCoach() {
+  const insights = useInsights()
+  const { songs } = useSongs()
+  if (!insights) return null
+  if (insights.source === 'fallback' || !insights.help) {
+    return (
+      <Card t={4} border="dashed" className="stack">
+        <h3 className="card-title">Help coach</h3>
+        <p className="dim with-icon">
+          <BrainCircuit aria-hidden size={20} /> TabPFN is still getting to know her: {insights.rows_used} notes so far. After a short
+          session with a few hits and a few misses, it starts choosing her practice and advising on help.
+        </p>
+      </Card>
+    )
+  }
+  const basis = insights.songs.find((s) => s.song_id === insights.help!.basis_song)!
+  const title = songs?.find((s) => s.id === basis.song_id)?.title ?? basis.song_id
+  const known = new Set(insights.known_levels ?? [])
+  return (
+    <Card t={4} pattern="dots" className="stack">
+      <div className="card-head">
+        <h3 className="card-title">Help coach</h3>
+        <Chip t={1} icon={<BrainCircuit aria-hidden />}>
+          TabPFN · {insights.rows_used} notes · {insights.seconds}s
+        </Chip>
+      </div>
+      <p className="dim">
+        Her chance of getting each note right first time on <strong>{title}</strong>, the song she practises most, at each level of help:
+      </p>
+      <ul className="meters">
+        {HELP.map((h) => {
+          const pct = Math.round(basis.by_level[h.level] * 100)
+          return (
+            <li key={h.level} className="meter-row">
+              <span className="meter-label">
+                {h.emoji} {h.title.split(' ')[0]}
+              </span>
+              {known.has(h.level) ? (
+                <>
+                  <span className="meter" role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct} aria-label={h.title}>
+                    <span className="meter-fill" style={{ width: `${pct}%` }} />
+                  </span>
+                  <span className="meter-value">{pct}%</span>
+                </>
+              ) : (
+                <span className="faint small meter-unknown">Not tried yet ({insights.rows_by_level?.[h.level] ?? 0} notes)</span>
+              )}
+            </li>
+          )
+        })}
+      </ul>
+      <p className="bubble tone-1 with-icon">
+        <BrainCircuit aria-hidden size={20} /> {adviceText(insights.help)}
+      </p>
+    </Card>
+  )
+}
 
 function ProgressTab() {
   const { dataVersion } = useApp()
@@ -109,6 +173,8 @@ function ProgressTab() {
           </Card>
         </div>
       )}
+
+      <HelpCoach />
 
       {progress && progress.weakest_jumps.length > 0 && (
         <Card t={1} pattern="dots" className="stack">
@@ -379,6 +445,7 @@ export function GrownUps({ tab: routeTab }: { tab?: string }) {
       </div>
       <div role="tabpanel">
         {tab === 'progress' && <ProgressTab />}
+        {tab === 'ask' && <AskPlink />}
         {tab === 'settings' && <SettingsTab />}
         {tab === 'calibrate' && <Calibrate instrument={instrument} onSaved={setInstrument} onDone={() => navigate('/grownups/mic')} />}
         {tab === 'mic' && <SelfTest instrument={instrument} onCalibrate={() => navigate('/grownups/calibrate')} />}

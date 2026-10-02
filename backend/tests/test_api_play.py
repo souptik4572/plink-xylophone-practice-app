@@ -60,6 +60,20 @@ def test_attempt_rows_get_derived_columns_and_play_counts(client, engine):
     assert rows[0].player == "child"
 
 
+def test_attempts_keep_tabpfns_prediction_for_calibration(client, engine):
+    from sqlmodel import Session, select
+
+    from app.models import Attempt
+
+    sid = client.post("/api/sessions", json={}).json()["id"]
+    rows = phrase0(sid)
+    rows[0]["predicted_success"] = 0.64
+    client.post("/api/attempts", json={"rows": rows})
+    with Session(engine) as db:
+        got = [a.predicted_success for a in db.exec(select(Attempt).order_by(Attempt.id)).all()]
+    assert got == [0.64, None, None, None]
+
+
 def test_tester_sessions_are_marked(client, engine):
     from sqlmodel import Session, select
 
@@ -78,6 +92,13 @@ def test_attempts_for_unknown_session_are_rejected(client):
 def test_next_drill_cold_start_walks_the_song_in_order(client):
     sid = client.post("/api/sessions", json={}).json()["id"]
     first = client.get(f"/api/next-drill?session_id={sid}&song_id=twinkle").json()
-    assert first == {"song_id": "twinkle", "phrase_idx": 0, "source": "fallback", "expected_success": None}
+    assert first == {
+        "song_id": "twinkle",
+        "phrase_idx": 0,
+        "source": "fallback",
+        "expected_success": None,
+        "note_probs": None,
+        "rows_used": 0,
+    }
     client.post("/api/attempts", json={"rows": phrase0(sid)})
     assert client.get(f"/api/next-drill?session_id={sid}&song_id=twinkle").json()["phrase_idx"] == 1

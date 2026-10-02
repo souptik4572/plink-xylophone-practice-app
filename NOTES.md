@@ -137,3 +137,48 @@ The user asked for milestone 6 framed as "making the learning experience more su
 - Icon-and-sentence lines wrapped the sentence under the icon; added a `.with-icon` utility.
 
 Tests: 138 pytest, 85 vitest. **Not committed:** the user asked to review the changes first.
+
+## AI upgrades for the Gemma and TabPFN prize categories (Fri 2 Oct)
+
+Judging (challenge 78, `full_details`): partner categories ask whether the project "use[s] that technology in a meaningful way"; the prompt asks that "the open pieces should be what makes your project work". Before this, TabPFN was dormant in a demo (36 rows < 60), and Gemma only wrote text even though the local model lists vision, audio, tools and thinking. The user chose: all four TabPFN items, plus Gemma song-from-photo and Ask Plink, with English only.
+
+**TabPFN now makes five decisions**
+1. **Learns from session one.** Spec deviation: 60 rows became 20 rows, with at least 3 hits and 3 misses (TabPFN is built for tiny tables). Live: it picked Twinkle part 4 at 79% (target 80%), learning from 36 notes, fit and predict in about 1 s.
+2. **Per-note help.** A pick now returns TabPFN's prediction for every note of the chosen part, at no extra model calls. Below 0.6 the glow comes 65% sooner (little help), the colour is spoken, and the hint comes at 4 s instead of 8 s; at 0.88 or above, help holds back (hint at 11 s). Tricky notes get a spark under their pip. Each attempt row now logs `predicted_success` (not a feature), and `make eval` prints live calibration once 10+ notes have predictions.
+3. **Help coach.** One fit predicts every song at every help level. Advice is "less" / "more" / "stay" / "**try**". Caught before shipping: all 36 rows were at "some", so all three levels predicted identically; the model can't know what it hasn't seen, and the naive rule would have said "ready for less help" with no evidence. TabPFN now only judges a level with 8+ rows there; otherwise it suggests trying that level once ("try").
+4. **Song difficulty for her.** A first-try % on each Songs card, and "TabPFN's pick today" on Home (the song closest to her sweet spot).
+5. **Trickiest jumps** now come from TabPFN at 20+ rows (live: C→D 17%, C→G 30%, C→F 32%).
+
+**Real benchmark.** First run on `plink.db`: 3 sessions, 36 rows, **all played by the user while testing, not by her yet**.
+
+| Model | Accuracy | ROC AUC | Log loss |
+| --- | --- | --- | --- |
+| Logistic regression | 0.778 | 0.819 | 0.442 |
+| TabPFN | 0.778 | 0.858 | 0.419 |
+
+Far too little data to claim a win. The benchmark also exposed a milestone 6 bug: the new `help_level` text column crashed the logistic baseline (fixed, with a test).
+
+**Gemma 4 vision: a song from a photo**
+- Probed on three generated Twinkle cards (letters, numbers, colour only) before building:
+
+  | Approach | Letters | Numbers | Colours | Time |
+  | --- | --- | --- | --- | --- |
+  | Flat list, no thinking | 8/14 (stopped early) | 14/14 | made up "1 2 3 4…" | 6–12 s |
+  | Row by row, no thinking | 12/14 | 12/14 | 12/14 (no more invented numbers) | 7–8 s |
+  | Row by row, thinking | 14/14 | 12/14 | 14/14 | 28–47 s |
+  | **Two passes: count (thinking), then list (no thinking)** | **14/14** | **14/14** | **14/14** | **~25 s** |
+
+  The small model's weak spot is counting, so it counts first, carefully, then lists fast with the counts given. Thinking stays off for every text job, where it only cost time, and is on only for the counting step.
+- Code owns the notes: the printed number or letter wins, colour tells low C from high C, and a note whose symbol and colour disagree is flagged dashed. On the letters card it flagged a turquoise "G" Gemma had called "green", and the bar was still right.
+- Through the real UI (file upload): the title and all 14 notes were read exactly. The photo is shrunk in the browser to 1280 px, sent only to the local server, and never stored. Not yet tried on a photographed real card.
+
+**Gemma 4 tools: Ask Plink**
+- Ollama function calling with five read-only tools: `get_progress`, `list_songs`, `predict_song` (TabPFN), `help_advice` (TabPFN), `recent_sessions`. At most 4 rounds; levels not yet tried are sent as null and the prompt makes Gemma say so; answers come in the family language; it only talks about her practice. Each answer shows which tools it used.
+- Live: "Is she ready for Jingle Bells?" called `predict_song`, cited 87%, and passed on TabPFN's "try little help". "Should she have less help?" said stay. "Capital of France?" was refused. 2.5–9 s.
+- Failure found and fixed: asked "what next?", Gemma misread the song list (it called the 85% song the easiest when another was 87%). Songs are now **ranked in code**, with TabPFN's suggested next song named, so Gemma only explains. TabPFN decides, Gemma explains.
+
+**Two bugs found by running it for real**
+- **Server deadlock (PyTorch on the GPU).** The backend stopped answering. `sample` on the worker showed three request threads stuck in `MetalShaderLibrary::exec_unary_kernel`: concurrent first use of an MPS kernel, triggered by the TabPFN warm-up thread plus Ask Plink requests. This can also happen in normal use (background drill refresh, insights, warm-up). Every TabPFN fit and predict now runs under one process-wide lock, with a test that fails without it (6 threads inside at once, now 1). The deadlocked worker was force-stopped and auto-reloaded.
+- **React crash in Ask Plink.** "destroy is not a function": Chrome's `scrollIntoView` now returns a Promise, and an arrow-bodied `useEffect` handed it to React as a cleanup. Fixed with a block body.
+
+Tests: 169 pytest, 91 vitest; typecheck and build clean. **Not committed:** the user asked to review first. The user's sessions (1–3, 5–7) were untouched; scripted runs were all tester sessions and were removed.

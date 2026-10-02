@@ -1,9 +1,10 @@
 """Plink local API. Binds to 127.0.0.1 only; receives bar indices and timings, never audio."""
 
+import base64
+import binascii
 import importlib.util
 import json
 import threading
-from datetime import datetime, timedelta, timezone
 import uuid
 from contextlib import asynccontextmanager
 from typing import Annotated, Any, Literal
@@ -14,8 +15,8 @@ from pydantic import BaseModel, Field
 from sqlmodel import Session, col, func, select
 
 from app import config
-from app import coach, drill
-from app.features import FEATURES, LABEL, derive_columns, frame, session_stats
+from app import ask, coach, drill, summary
+from app.features import derive_columns, session_stats
 from app.fitter import REFERENCE_MIDI, fit_song, midi_to_name, parse_notes
 from app.models import (
     Attempt,
@@ -24,6 +25,7 @@ from app.models import (
     Settings,
     Song,
     bar_labels,
+    bar_legend,
     bar_offsets,
     engine,
     get_session,
@@ -177,7 +179,7 @@ def list_songs(db: SessionDep) -> list[dict[str, Any]]:
 
 class SongIn(BaseModel):
     title: str = Field(min_length=1, max_length=80)
-    source: Literal["played", "hummed", "typed"] = "typed"
+    source: Literal["played", "hummed", "typed", "photo"] = "typed"
     # Either note names ("C4 C4 G4:2") or bar indices on her instrument, with beats.
     notes: str | None = None
     bars: list[int] | None = None
@@ -223,6 +225,30 @@ def build_lesson(song_id: str, body: LessonIn, db: SessionDep) -> dict[str, Any]
     return {**song_out(song, bar_offsets(db)), "lesson_source": lesson.source, "seconds": round(lesson.seconds, 1)}
 
 
+class CardIn(BaseModel):
+    # A data URL or plain base64. The image is read and dropped, never stored.
+    image: str = Field(min_length=8)
+
+
+@app.post("/api/songs/read-card")
+def read_card(body: CardIn, db: SessionDep) -> dict[str, Any]:
+    """Gemma 4 vision reads a photo of a song card; code maps what it saw to her bars."""
+    raw = body.image.split(",", 1)[1] if body.image.startswith("data:") else body.image
+    try:
+        image = base64.b64decode(raw, validate=True)
+    except (binascii.Error, ValueError) as e:
+        raise HTTPException(422, "Not an image") from e
+    if len(image) > config.CARD_MAX_BYTES:
+        raise HTTPException(413, "That photo is too large")
+    legend = bar_legend(db)
+    try:
+        card = coach.read_card(image, legend)
+    except coach.CardError as e:
+        raise HTTPException(503, f"Gemma couldn't read the card: {e}") from e
+    mapped = coach.map_card(card.notes, legend)
+    return {**mapped, "title": card.title, "beats": [1] * len(mapped["bars"]), "counts": card.counts, "seconds": card.seconds}
+
+
 class FitIn(BaseModel):
     notes: str
 
@@ -246,19 +272,9 @@ def start_session(body: SessionIn, db: SessionDep) -> dict[str, Any]:
     return {"id": s.id, "player": s.player, "started_at": s.started_at.isoformat()}
 
 
-def child_history(db: Session):
-    rows = db.exec(select(Attempt).where(Attempt.player == "child")).all()
-    return frame([r.model_dump(include={*FEATURES, LABEL}) for r in rows]) if rows else frame([])
-
-
 @app.get("/api/sessions")
 def list_sessions(db: SessionDep, limit: int = 20) -> list[dict[str, Any]]:
-    out = []
-    for s in db.exec(select(PracticeSession).order_by(col(PracticeSession.id).desc()).limit(limit)).all():
-        rows = [r.model_dump() for r in db.exec(select(Attempt).where(Attempt.session_id == s.id)).all()]
-        if rows:
-            out.append({"id": s.id, "player": s.player, "started_at": s.started_at.isoformat(), "stats": session_stats(rows), "parent_note": s.parent_note})
-    return out
+    return summary.sessions(db, limit)
 
 
 @app.post("/api/sessions/{session_id}/parent-note")
@@ -270,7 +286,7 @@ def write_parent_note(session_id: int, db: SessionDep) -> dict[str, Any]:
     if not rows:
         raise HTTPException(409, "Nothing was played in this session")
     stats = session_stats(rows)
-    weak = drill.weakest_jumps(child_history(db), bar_labels(db))
+    weak = drill.weakest_jumps(summary.child_history(db), bar_labels(db))
     prefs = get_settings(db)
     note = coach.parent_note(stats, weak, prefs.child_name, prefs.home_language)
     s.parent_note = note.text
@@ -281,30 +297,29 @@ def write_parent_note(session_id: int, db: SessionDep) -> dict[str, Any]:
 
 @app.get("/api/progress")
 def progress(db: SessionDep) -> dict[str, Any]:
-    """Her totals across child sessions, plus the jumps TabPFN expects her to find hardest."""
-    rows = db.exec(select(Attempt).where(Attempt.player == "child")).all()
-    sessions = {r.session_id for r in rows}
-    started = db.exec(select(PracticeSession.started_at).where(col(PracticeSession.id).in_(sessions))).all()
-    days = sorted({d.date() for d in started}, reverse=True)
-    streak, expect = 0, datetime.now(timezone.utc).date()
-    if days and days[0] < expect:
-        expect -= timedelta(days=1)  # a streak survives until she misses a whole day
-    for d in days:
-        if d != expect:
-            break
-        streak += 1
-        expect -= timedelta(days=1)
-    n = len(rows)
-    return {
-        "sessions": len(sessions),
-        "notes": n,
-        "first_try_pct": round(100 * sum(r.first_try_correct for r in rows) / n) if n else 0,
-        # One star per note right first time: her sticker book fills from these.
-        "stars": sum(r.first_try_correct for r in rows),
-        "practice_days": len(days),
-        "streak_days": streak,
-        "weakest_jumps": drill.weakest_jumps(child_history(db), bar_labels(db)) if n else [],
-    }
+    return summary.progress(db)
+
+
+@app.get("/api/insights")
+def get_insights(db: SessionDep) -> dict[str, Any]:
+    """TabPFN's view of her: every song at every help level, and whether to change the help."""
+    return drill.insights(db)
+
+
+class AskMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(max_length=2000)
+
+
+class AskIn(BaseModel):
+    question: str = Field(min_length=1, max_length=500)
+    history: list[AskMessage] = Field(default_factory=list, max_length=20)
+
+
+@app.post("/api/ask")
+def ask_plink(body: AskIn, db: SessionDep) -> dict[str, Any]:
+    """A grown-up's question, answered by Gemma using read-only tools over her data and TabPFN."""
+    return ask.answer(db, body.question.strip(), [m.model_dump() for m in body.history])
 
 
 @app.post("/api/praise")
@@ -347,6 +362,7 @@ class AttemptIn(BaseModel):
     wrong_before_correct: int = Field(ge=0)
     first_try_correct: bool
     help_level: Literal["lots", "some", "little"] = "some"
+    predicted_success: float | None = Field(default=None, ge=0, le=1)
 
 
 class AttemptsIn(BaseModel):
@@ -390,4 +406,11 @@ def next_drill(session_id: int, db: SessionDep, song_id: str | None = None) -> d
         p = drill.next_drill(db, session_id, song_id)
     except LookupError as e:
         raise HTTPException(404, "No such song") from e
-    return {"song_id": p.song_id, "phrase_idx": p.phrase_idx, "source": p.source, "expected_success": p.expected_success}
+    return {
+        "song_id": p.song_id,
+        "phrase_idx": p.phrase_idx,
+        "source": p.source,
+        "expected_success": p.expected_success,
+        "note_probs": p.note_probs,
+        "rows_used": p.rows_used,
+    }

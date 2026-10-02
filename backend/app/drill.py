@@ -1,10 +1,13 @@
 """TabPFN drill picker: fit, predict, choose, cold start (spec 7.9)."""
 
+import hashlib
+import json
 import logging
 import threading
 import time
 from dataclasses import dataclass
 
+import numpy as np
 import pandas as pd
 from sqlalchemy.engine import Engine
 from sqlmodel import Session, col, func, select
@@ -31,6 +34,22 @@ class Pick:
     source: str  # tabpfn | fallback
     expected_success: float | None
     seconds: float = 0.0
+    # TabPFN's first-try prediction for each note of the chosen part, for per-note help.
+    note_probs: list[float] | None = None
+    rows_used: int = 0
+
+
+# PyTorch's GPU (MPS) backend deadlocked when several threads first used a kernel
+# at once (three request threads stuck in MetalShaderLibrary::exec_unary_kernel),
+# so every TabPFN fit and predict in this process runs under this one lock.
+_tabpfn_lock = threading.Lock()
+
+
+def fit_predict(model, X_train: pd.DataFrame, y: pd.Series, X: pd.DataFrame) -> np.ndarray:
+    """P(right first time) for each row of X, from a model fitted on her history."""
+    with _tabpfn_lock:
+        m = model().fit(X_train, y)
+        return m.predict_proba(X)[:, list(m.classes_).index(1)]
 
 
 def tabpfn_model():
@@ -50,6 +69,14 @@ def choose(expected: list[float], exclude: int | None, target: float = config.DR
     return min(options, key=lambda i: (round(abs(expected[i] - target), 9), i))
 
 
+def cold_start(history: pd.DataFrame) -> bool:
+    """Too little to learn from: under 20 rows, or too few hits or misses."""
+    if len(history) < config.COLD_START_MIN_ROWS:
+        return True
+    counts = history[LABEL].astype(bool).value_counts()
+    return min(counts.get(True, 0), counts.get(False, 0)) < config.COLD_START_MIN_PER_CLASS
+
+
 def pick(
     history: pd.DataFrame,
     cands: list[Candidate],
@@ -60,19 +87,21 @@ def pick(
     keys = [(c.song_id, c.phrase_idx) for c in cands]
     last_i = keys.index(last) if last in keys else None
 
-    if len(history) < config.COLD_START_MIN_ROWS or history[LABEL].nunique() < 2:
+    if cold_start(history):
         i = 0 if last_i is None else (last_i + 1) % len(cands)
-        return Pick(cands[i].song_id, cands[i].phrase_idx, "fallback", None)
+        return Pick(cands[i].song_id, cands[i].phrase_idx, "fallback", None, rows_used=len(history))
 
     t = time.perf_counter()
-    m = model().fit(history[FEATURES], history[LABEL].astype(int))
-    proba = m.predict_proba(pd.concat([c.rows for c in cands], ignore_index=True))[:, list(m.classes_).index(1)]
-    expected, at = [], 0
+    proba = fit_predict(model, history[FEATURES], history[LABEL].astype(int), pd.concat([c.rows for c in cands], ignore_index=True))
+    per_note, at = [], 0
     for c in cands:
-        expected.append(float(proba[at : at + len(c.rows)].mean()))
+        per_note.append([float(x) for x in proba[at : at + len(c.rows)]])
         at += len(c.rows)
+    expected = [sum(ps) / len(ps) for ps in per_note]
     i = choose(expected, last_i, target)
-    return Pick(cands[i].song_id, cands[i].phrase_idx, "tabpfn", expected[i], time.perf_counter() - t)
+    return Pick(
+        cands[i].song_id, cands[i].phrase_idx, "tabpfn", expected[i], time.perf_counter() - t, per_note[i], len(history)
+    )
 
 
 def weakest_jumps(history: pd.DataFrame, labels: list[str], k: int = 3, model=tabpfn_model) -> list[dict]:
@@ -92,7 +121,7 @@ def weakest_jumps(history: pd.DataFrame, labels: list[str], k: int = 3, model=ta
     def named(prev, target, expected, source):
         return {"from": labels[int(prev)], "to": labels[int(target)], "expected": float(expected), "source": source}
 
-    if len(history) < config.COLD_START_MIN_ROWS or history[LABEL].nunique() < 2:
+    if cold_start(history):
         seen = pairs[pairs["count"] >= 3].assign(rate=lambda d: (d["sum"] + 1) / (d["count"] + 2))
         seen = seen.sort_values(["rate", "prev_bar", "target_bar"]).head(k)
         return [named(r.prev_bar, r.target_bar, r.rate, "observed") for r in seen.itertuples()]
@@ -110,8 +139,7 @@ def weakest_jumps(history: pd.DataFrame, labels: list[str], k: int = 3, model=ta
         ],
         ignore_index=True,
     )
-    m = model().fit(history[FEATURES], history[LABEL].astype(int))
-    pairs["expected"] = m.predict_proba(probe[FEATURES])[:, list(m.classes_).index(1)]
+    pairs["expected"] = fit_predict(model, history[FEATURES], history[LABEL].astype(int), probe[FEATURES])
     worst = pairs.sort_values(["expected", "prev_bar", "target_bar"]).head(k)
     return [named(r.prev_bar, r.target_bar, r.expected, "tabpfn") for r in worst.itertuples()]
 
@@ -120,10 +148,109 @@ _lock = threading.Lock()
 _cache: dict[tuple[int, str | None], tuple[int, Pick]] = {}
 
 
+# Help levels from most help to least.
+LADDER = ["lots", "some", "little"]
+
+
+def advise(by_level: dict[str, float], current: str, target: float, known: set[str] | None = None) -> dict:
+    """Fading prompts, decided by her predicted success at each help level.
+
+    Less help when she'd still meet the target with it; more help when she is
+    expected to fall well short at the current level; otherwise stay. A level
+    she has never played is unknown to the model (its prediction just copies
+    the levels it has seen), so instead of "ready" it asks her to try it once.
+    """
+    known = set(LADDER) if known is None else known
+    i = LADDER.index(current)
+    if i + 1 < len(LADDER) and by_level[current] >= target:
+        less = LADDER[i + 1]
+        if less not in known:
+            return {"suggest": "try", "level": less, "now": by_level[current], "then": None}
+        if by_level[less] >= target:
+            return {"suggest": "less", "level": less, "now": by_level[current], "then": by_level[less]}
+    if i > 0 and by_level[current] < target - config.HELP_MORE_MARGIN:
+        return {"suggest": "more", "level": LADDER[i - 1], "now": by_level[current], "then": by_level[LADDER[i - 1]]}
+    return {"suggest": "stay", "level": current, "now": by_level[current], "then": None}
+
+
+_insights_cache: dict[str, dict] = {}
+
+
+def insights(db: Session) -> dict:
+    """One TabPFN fit, then her expected first-try success for every song at every help level."""
+    child = db.exec(select(Attempt).where(Attempt.player == "child").order_by(col(Attempt.id))).all()
+    history = frame([r.model_dump(include={*FEATURES, LABEL}) for r in child])
+    if cold_start(history):
+        return {"source": "fallback", "rows_used": len(history), "songs": [], "help": None}
+
+    prefs = get_settings(db)
+    songs = list(db.exec(select(Song).order_by(col(Song.created_at))).all())
+    offsets = bar_offsets(db)
+    key = hashlib.sha1(
+        json.dumps(
+            [len(child), child[-1].id, prefs.help_level, prefs.drill_target, offsets, [(s.id, s.notes, s.phrases) for s in songs]],
+            default=str,
+        ).encode()
+    ).hexdigest()
+    with _lock:
+        if key in _insights_cache:
+            return _insights_cache[key]
+
+    plays = {
+        (s, p): n
+        for s, p, n in db.exec(
+            select(Attempt.song_id, Attempt.phrase_idx, func.count())
+            .where(Attempt.pos_in_phrase == 0)
+            .group_by(Attempt.song_id, Attempt.phrase_idx)
+        ).all()
+    }
+    source = child[-1].input_source
+    blocks, index = [], []
+    for song in songs:
+        bars = fit_song([m for m, _ in parse_notes(song.notes)], offsets).bars
+        for i, p in enumerate(song_phrases(song)):
+            for level in LADDER:
+                rows = candidate_rows(bars[p["start"] : p["end"] + 1], plays.get((song.id, i), 0), source, 1.0, level)
+                blocks.append(rows)
+                index += [(song.id, level)] * len(rows)
+
+    t = time.perf_counter()
+    proba = fit_predict(tabpfn_model, history[FEATURES], history[LABEL].astype(int), pd.concat(blocks, ignore_index=True)[FEATURES])
+    sums: dict[tuple[str, str], list[float]] = {}
+    for k, p in zip(index, proba):
+        sums.setdefault(k, []).append(float(p))
+    by_song = {s.id: {lv: sum(sums[(s.id, lv)]) / len(sums[(s.id, lv)]) for lv in LADDER} for s in songs}
+
+    rows_by_level = {lv: int((history["help_level"] == lv).sum()) for lv in LADDER}
+    known = {lv for lv, n in rows_by_level.items() if n >= config.HELP_MIN_ROWS}
+    # Advice is about the song she practises most, at the level she plays now.
+    counts: dict[str, int] = {}
+    for r in child:
+        counts[r.song_id] = counts.get(r.song_id, 0) + 1
+    basis = max(counts, key=counts.get)
+    out = {
+        "source": "tabpfn",
+        "rows_used": len(history),
+        "seconds": round(time.perf_counter() - t, 2),
+        "songs": [
+            {"song_id": s, "by_level": lv, "help": advise(lv, prefs.help_level, prefs.drill_target, known)}
+            for s, lv in by_song.items()
+        ],
+        "rows_by_level": rows_by_level,
+        "known_levels": [lv for lv in LADDER if lv in known],
+        "help": {**advise(by_song[basis], prefs.help_level, prefs.drill_target, known), "basis_song": basis},
+    }
+    with _lock:
+        _insights_cache.clear()
+        _insights_cache[key] = out
+    return out
+
+
 def clear_cache() -> None:
     """Session ids can be reused once data is deleted, so cached picks go with it."""
     with _lock:
         _cache.clear()
+        _insights_cache.clear()
 
 
 def _compute(db: Session, session_id: int, song_id: str | None, last: Attempt | None) -> Pick:
@@ -192,7 +319,8 @@ def warm_up() -> None:
         from tabpfn import TabPFNClassifier
 
         X = pd.DataFrame({"a": [0, 1, 0, 1] * 5})
-        TabPFNClassifier().fit(X, [0, 1, 0, 1] * 5).predict_proba(X.head(1))
+        with _tabpfn_lock:
+            TabPFNClassifier().fit(X, [0, 1, 0, 1] * 5).predict_proba(X.head(1))
         log.info("TabPFN warmed up")
     except Exception:
         log.exception("TabPFN warm-up failed; the first pick will load it instead")

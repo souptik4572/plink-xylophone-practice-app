@@ -4,6 +4,7 @@ Code owns the notes: Gemma only groups them and writes words. Every reply is
 validated; on invalid output or a timeout the caller gets a fixed fallback.
 """
 
+import base64
 import json
 import logging
 import time
@@ -60,15 +61,28 @@ def _log(job: str, ok: bool, seconds: float, reply: dict | None, error: str = ""
         f.write(json.dumps(entry) + "\n")
 
 
-def _ask(job: str, system: str, prompt: str, schema: dict, validate, timeout: float = config.GEMMA_TIMEOUT_S):
+def _ask(
+    job: str,
+    system: str,
+    prompt: str,
+    schema: dict,
+    validate,
+    timeout: float = config.GEMMA_TIMEOUT_S,
+    images: list[str] | None = None,
+    think: bool | None = None,
+    temperature: float = 0.3,
+):
     """One structured call. Returns (validated value or None, error, seconds)."""
+    user: dict = {"role": "user", "content": prompt}
+    if images:
+        user["images"] = images
     body = {
         "model": config.GEMMA_MODEL,
         "stream": False,
-        "think": config.GEMMA_THINK,
+        "think": config.GEMMA_THINK if think is None else think,
         "format": schema,
-        "options": {"temperature": 0.3},
-        "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+        "options": {"temperature": temperature},
+        "messages": [{"role": "system", "content": system}, user],
     }
     t = time.perf_counter()
     reply = None
@@ -278,3 +292,145 @@ def praise_lines(name: str, language: str) -> Praise:
     if lines is None:
         return Praise(DEFAULT_PRAISE, "fallback", seconds, error)
     return Praise(lines, "gemma", seconds)
+
+
+COLOUR_WORDS = {
+    "teal": "turquoise", "cyan": "turquoise", "aqua": "turquoise", "light blue": "turquoise",
+    "violet": "purple", "lilac": "purple", "lavender": "purple",
+    "magenta": "pink", "rose": "pink", "fuchsia": "pink",
+    "gold": "yellow", "amber": "orange", "lime": "green", "navy": "blue", "dark blue": "blue",
+    "crimson": "red", "scarlet": "red",
+}
+
+
+def _bar_by_colour(word: str, bars: list[dict]) -> int | None:
+    w = " ".join(word.lower().split())
+    w = COLOUR_WORDS.get(w, w)
+    names = [str(b.get("colour_name") or "").lower() for b in bars]
+    return names.index(w) if w in names else None
+
+
+def _bar_by_symbol(symbol: str, colour_bar: int | None, bars: list[dict]) -> int | None:
+    s = symbol.strip().replace("′", "'").replace("’", "'")
+    if s.isdigit():
+        k = int(s)
+        return k - 1 if 1 <= k <= len(bars) else None
+    labels = [str(b["label"]).replace("′", "'").upper() for b in bars]
+    same = [i for i, lab in enumerate(labels) if lab.rstrip("'") == s.upper().rstrip("'")]
+    if not same:
+        return None
+    if s.endswith("'"):
+        primed = [i for i in same if labels[i].endswith("'")]
+        return primed[0] if primed else same[-1]
+    # Two bars can share a letter (low and high C): the colour says which one.
+    return colour_bar if colour_bar in same else same[0]
+
+
+def map_card(notes: list[dict], bars: list[dict]) -> dict:
+    """What Gemma saw on the card, to her bars. Code owns the notes.
+
+    The printed number or letter wins; the colour is a cross-check, and a note
+    where the two disagree is flagged for the grown-up. Notes with neither are
+    dropped and counted.
+    """
+    out: list[int] = []
+    flagged: list[int] = []
+    unreadable = 0
+    for note in notes:
+        cb = _bar_by_colour(str(note.get("colour", "")), bars)
+        printed = str(note.get("printed", "")).strip()
+        sb = _bar_by_symbol(printed, cb, bars) if printed else None
+        bar = sb if sb is not None else cb
+        if bar is None:
+            unreadable += 1
+            continue
+        if sb is not None and cb is not None and sb != cb:
+            flagged.append(len(out))
+        out.append(bar)
+    return {"bars": out, "flagged": flagged, "unreadable": unreadable}
+
+
+class CardError(Exception):
+    pass
+
+
+@dataclass
+class Card:
+    title: str
+    notes: list[dict]
+    counts: list[int]
+    seconds: float
+
+
+CARD_SYSTEM = "You read song cards for children's toy xylophones. You answer only with the requested JSON."
+CARD_NOTE = {
+    "type": "object",
+    "properties": {"printed": {"type": "string"}, "colour": {"type": "string"}},
+    "required": ["printed", "colour"],
+}
+
+
+def read_card(image: bytes, bars: list[dict]) -> Card:
+    """Gemma 4 vision, in two passes measured on test cards: counting circles is
+    where the small model slips (it dropped the last circle of each row), so it
+    first counts with thinking on, then lists the notes fast with the counts given.
+    """
+    img = base64.b64encode(image).decode()
+    legend = ", ".join(f"{i + 1} {b['label']} {b.get('colour_name') or ''}".strip() for i, b in enumerate(bars))
+    intro = f"This is a song card for a child's toy xylophone (bars, low to high: {legend}). The notes are drawn as coloured shapes in rows."
+
+    def valid_counts(o: dict) -> dict:
+        rows = [int(x) for x in o["rows"]]
+        if not 1 <= len(rows) <= 12 or not all(1 <= r <= 32 for r in rows):
+            raise ValueError(f"odd row counts {rows}")
+        return {"title": str(o.get("title", "")).strip()[:80], "rows": rows}
+
+    counted, err, s1 = _ask(
+        "card_count",
+        CARD_SYSTEM,
+        f"{intro} How many notes are in each row, top to bottom? Count carefully, including the last one on the right. "
+        "Also give the song title if one is printed.",
+        {"type": "object", "properties": {"title": {"type": "string"}, "rows": {"type": "array", "items": {"type": "integer"}}}, "required": ["title", "rows"]},
+        valid_counts,
+        config.GEMMA_VISION_TIMEOUT_S,
+        images=[img],
+        think=True,
+        temperature=0,
+    )
+    if counted is None:
+        raise CardError(err)
+    counts = counted["rows"]
+
+    def valid_rows(o: dict) -> list[dict]:
+        rows = o["rows"]
+        if len(rows) != len(counts):
+            raise ValueError(f"{len(rows)} rows, expected {len(counts)}")
+        return [{"printed": str(n["printed"]), "colour": str(n["colour"])} for row in rows for n in row]
+
+    spec = "; ".join(f"row {i + 1} has exactly {c} notes" for i, c in enumerate(counts))
+    notes, err, s2 = _ask(
+        "card_read",
+        CARD_SYSTEM,
+        f"{intro} The rows: {spec}. List every note row by row, left to right. 'printed' is exactly the letter or number "
+        "printed on it, or an empty string if there is none; never number the notes yourself. 'colour' is one plain colour word.",
+        {
+            "type": "object",
+            "properties": {
+                "rows": {
+                    "type": "array",
+                    "minItems": len(counts),
+                    "maxItems": len(counts),
+                    "items": {"type": "array", "items": CARD_NOTE},
+                }
+            },
+            "required": ["rows"],
+        },
+        valid_rows,
+        config.GEMMA_VISION_TIMEOUT_S,
+        images=[img],
+        think=False,
+        temperature=0,
+    )
+    if notes is None:
+        raise CardError(err)
+    return Card(counted["title"], notes, counts, round(s1 + s2, 1))

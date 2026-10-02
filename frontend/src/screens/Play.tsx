@@ -12,11 +12,13 @@ import {
   type ParentNote,
 } from '../api'
 import { useApp } from '../app/AppContext'
+import { useInsights } from '../app/useInsights'
 import { lastSongId, rememberSong, useSongs } from '../app/useSongs'
 import { audioConfig } from '../audio/audioConfig'
 import { listenForBars } from '../audio/mic'
 import { getAudioContext, playTone } from '../audio/synth'
 import { barFrequency, isCalibrated } from '../instrument'
+import { adviceText, HELP } from '../kids/help'
 import { Mascot, type Mood } from '../kids/Mascot'
 import { newSticker, type Sticker } from '../kids/stickers'
 import { createPhraseRun, type HelpLevel, type PhraseRun } from '../play/phraseRun'
@@ -43,11 +45,6 @@ interface Turn {
   phrase: Phrase
 }
 
-const HELP: { level: HelpLevel; emoji: string; title: string; text: string }[] = [
-  { level: 'lots', emoji: '🌱', title: 'Lots of help', text: 'Only the glowing bar plays, and Plink says each colour. No mistakes possible.' },
-  { level: 'some', emoji: '🌿', title: 'Some help', text: 'The next bar glows. Plink gives a hint if she gets stuck.' },
-  { level: 'little', emoji: '🌳', title: 'Little help', text: 'She plays from memory. The bar glows only if she needs it.' },
-]
 
 /** True once the page has had a click or key press, so audio may start without another. */
 const canAutoplay = () => (navigator as Navigator & { userActivation?: { hasBeenActive: boolean } }).userActivation?.hasBeenActive ?? false
@@ -62,6 +59,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 export function Play({ songId: initialSong, autostart }: { songId?: string; autostart?: boolean }) {
   const { instrument, settings, setSettings, navigate, serverUp } = useApp()
   const { songs, offline } = useSongs()
+  const insights = useInsights()
   const xylo = useRef<XylophoneHandle>(null)
   const [songId, setSongId] = useState(initialSong ?? lastSongId())
   const [source, setSource] = useState<Source>('onscreen')
@@ -93,6 +91,8 @@ export function Play({ songId: initialSong, autostart }: { songId?: string; auto
   const waiting = useRef(false)
   /** Whether the target has been shown for this note yet (little help hides it at first). */
   const prompted = useRef(false)
+  /** TabPFN's first-try prediction for each note of this part, when it chose the part. */
+  const noteProbs = useRef<number[] | null>(null)
   /** Bumped to cancel a demonstration still in flight (Finish, next part). */
   const phaseToken = useRef(0)
   const hintTimer = useRef(0)
@@ -105,6 +105,8 @@ export function Play({ songId: initialSong, autostart }: { songId?: string; auto
   const playable = songs?.filter((s) => s.phrases.length > 0) ?? []
   const chosen = playable.find((s) => s.id === songId) ?? playable[0]
   const name = settings.child_name.trim()
+  const songInsight = insights?.songs.find((s) => s.song_id === chosen?.id)
+  const known = new Set(insights?.known_levels ?? [])
 
   const clearTimers = () => {
     clearTimeout(hintTimer.current)
@@ -158,9 +160,9 @@ export function Play({ songId: initialSong, autostart }: { songId?: string; auto
     say(`Try the ${colourWord(t)} one`)
   }
 
-  const armHint = () => {
+  const armHint = (ms: number = cfg.hintAfterSilenceMs) => {
     clearTimeout(hintTimer.current)
-    hintTimer.current = window.setTimeout(hint, cfg.hintAfterSilenceMs)
+    hintTimer.current = window.setTimeout(hint, ms)
   }
 
   const presentNote = () => {
@@ -170,24 +172,29 @@ export function Play({ songId: initialSong, autostart }: { songId?: string; auto
     prompted.current = false
     r.present(performance.now())
     waiting.current = true
+    // TabPFN's prediction for this very note decides how soon help arrives.
+    const p = noteProbs.current?.[r.position()] ?? null
+    const tricky = p !== null && p < cfg.adaptive.trickyBelow
+    const easy = p !== null && p >= cfg.adaptive.easyFrom
     xylo.current?.only(help.onlyTarget && source === 'onscreen' ? t : null)
     if (help.glowAtStart) {
       showTarget(t, help.targetTone)
     } else {
       xylo.current?.highlight(null, null)
+      const factor = tricky ? cfg.adaptive.trickyPromptFactor : easy ? cfg.adaptive.easyPromptFactor : 1
       promptTimer.current = window.setTimeout(() => {
         showTarget(t, true)
         setBubble('This one!')
-      }, help.promptAfterMs)
+      }, help.promptAfterMs * factor)
     }
-    if (help.sayColour) {
+    if (help.sayColour || (tricky && cfg.adaptive.sayColourWhenTricky)) {
       setBubble(`${colourWord(t)}!`)
       say(colourWord(t))
     } else {
       setBubble('Your turn!')
     }
     setProgress(r.position())
-    armHint()
+    armHint(tricky ? cfg.adaptive.trickyHintAfterMs : easy ? cfg.adaptive.easyHintAfterMs : cfg.hintAfterSilenceMs)
   }
 
   /** Plink's turn: play the part once, bars lighting, then hand over to her. */
@@ -217,9 +224,10 @@ export function Play({ songId: initialSong, autostart }: { songId?: string; auto
     presentNote()
   }
 
-  const beginPhrase = (song: ApiSong, phraseIdx: number) => {
+  const beginPhrase = (song: ApiSong, phraseIdx: number, probs: number[] | null) => {
     const s = session.current!
     const phrase = song.phrases[phraseIdx]
+    noteProbs.current = probs
     run.current = createPhraseRun({
       sessionId: s.id,
       songId: song.id,
@@ -228,6 +236,7 @@ export function Play({ songId: initialSong, autostart }: { songId?: string; auto
       bars: phraseBars(song, phrase),
       sessionStart: s.start,
       helpLevel,
+      predicted: probs,
     })
     setTurn({ song, phraseIdx, phrase })
     setProgress(0)
@@ -252,7 +261,7 @@ export function Play({ songId: initialSong, autostart }: { songId?: string; auto
       const d = await nextDrill(s.id, chosen.id)
       setDrill(d)
       const song = playable.find((x) => x.id === d.song_id) ?? chosen
-      beginPhrase(song, d.phrase_idx)
+      beginPhrase(song, d.phrase_idx, d.source === 'tabpfn' && song.id === d.song_id ? d.note_probs : null)
     } catch (e) {
       setError(`Could not reach the local server: ${e instanceof Error ? e.message : e}`)
     }
@@ -557,6 +566,18 @@ export function Play({ songId: initialSong, autostart }: { songId?: string; auto
           <h3 className="step-title ts-1">
             <span className="step-num tone-2">3</span> How much help?
           </h3>
+          {songInsight ? (
+            <p className="bubble tone-4 with-icon">
+              <BrainCircuit aria-hidden size={20} /> {adviceText(songInsight.help)}
+            </p>
+          ) : (
+            insights?.source === 'fallback' && (
+              <p className="faint small with-icon">
+                <BrainCircuit aria-hidden size={18} /> TabPFN is still getting to know her ({insights.rows_used} notes so far). It
+                starts advising after a short session.
+              </p>
+            )
+          )}
           <div className="help-choices" role="group" aria-label="How much help">
             {HELP.map((h, i) => (
               <button
@@ -572,6 +593,24 @@ export function Play({ songId: initialSong, autostart }: { songId?: string; auto
                 <span className="stack-tight">
                   <strong>{h.title}</strong>
                   <span className="faint small">{h.text}</span>
+                  {songInsight && (
+                    <span className="row small help-insight">
+                      {known.has(h.level) ? (
+                        <Chip t={1} icon={<BrainCircuit aria-hidden />}>
+                          {Math.round(songInsight.by_level[h.level] * 100)}% first try
+                        </Chip>
+                      ) : (
+                        <Chip t={2} dashed>
+                          Not tried yet
+                        </Chip>
+                      )}
+                      {songInsight.help.level === h.level && songInsight.help.suggest !== 'stay' && (
+                        <Chip t={4} solid>
+                          {songInsight.help.suggest === 'try' ? 'Try this' : 'TabPFN suggests'}
+                        </Chip>
+                      )}
+                    </span>
+                  )}
                 </span>
               </button>
             ))}
@@ -602,6 +641,7 @@ export function Play({ songId: initialSong, autostart }: { songId?: string; auto
   }
 
   const phraseLen = turn ? turn.phrase.end - turn.phrase.start + 1 : 0
+  const trickyCount = drill?.source === 'tabpfn' ? (drill.note_probs ?? []).filter((p) => p < cfg.adaptive.trickyBelow).length : 0
   const firstTryPct = stats.notes ? Math.round((100 * stats.firstTry) / stats.notes) : 0
 
   return (
@@ -624,7 +664,12 @@ export function Play({ songId: initialSong, autostart }: { songId?: string; auto
           {phraseBars(turn.song, turn.phrase).map((b, i) => (
             <li
               key={i}
-              className={cn('pip', i < progress && 'done', i === progress && stage === 'playing' && turnPhase === 'turn' && 'now')}
+              className={cn(
+                'pip',
+                i < progress && 'done',
+                i === progress && stage === 'playing' && turnPhase === 'turn' && 'now',
+                (drill?.source === 'tabpfn' ? drill.note_probs?.[i] ?? 1 : 1) < cfg.adaptive.trickyBelow && 'tricky',
+              )}
               style={{ '--pip': bar(b).colour } as React.CSSProperties}
             />
           ))}
@@ -654,8 +699,10 @@ export function Play({ songId: initialSong, autostart }: { songId?: string; auto
           {drill && (
             <Chip t={drill.source === 'tabpfn' ? 4 : 1} dashed icon={drill.source === 'tabpfn' ? <BrainCircuit aria-hidden /> : <ListOrdered aria-hidden />}>
               {drill.source === 'tabpfn'
-                ? `TabPFN pick · ${Math.round((drill.expected_success ?? 0) * 100)}% first-try chance`
-                : 'In song order · TabPFN takes over after more practice'}
+                ? `TabPFN pick · learned from ${drill.rows_used} notes · ${Math.round((drill.expected_success ?? 0) * 100)}% first-try chance${
+                    trickyCount ? ` · help comes sooner on ${trickyCount} tricky ${trickyCount === 1 ? 'note' : 'notes'}` : ''
+                  }`
+                : `In song order · TabPFN is still learning (${drill.rows_used} notes so far)`}
             </Chip>
           )}
         </div>

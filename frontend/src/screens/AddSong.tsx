@@ -1,6 +1,6 @@
-import { ArrowLeft, Circle, CopyPlus, Keyboard, Mic, MicVocal, Play, Plus, Sparkles, Square, Trash2, Type } from 'lucide-react'
+import { ArrowLeft, Camera, Circle, CopyPlus, Keyboard, Mic, MicVocal, Play, Plus, ScanEye, Sparkles, Square, Trash2, Type } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { buildLesson, createSong, fitNotes } from '../api'
+import { buildLesson, createSong, fitNotes, readCard } from '../api'
 import { useApp } from '../app/AppContext'
 import { audioConfig } from '../audio/audioConfig'
 import { listenForBars } from '../audio/mic'
@@ -18,7 +18,18 @@ import { cn, tone } from '../theme/palette'
 import { confetti } from '../ui/confetti'
 import { Button, Card, Field, ScreenTitle, Switch } from '../ui/ui'
 
-type Route = 'play' | 'sing' | 'type'
+type Route = 'play' | 'sing' | 'photo' | 'type'
+
+/** Shrink a photo in the browser before it goes to the local server: Gemma reads ~1280 px as well as 12 MP. */
+async function shrinkPhoto(file: File, maxSide = 1280): Promise<string> {
+  const bitmap = await createImageBitmap(file)
+  const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height))
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.round(bitmap.width * scale)
+  canvas.height = Math.round(bitmap.height * scale)
+  canvas.getContext('2d')!.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+  return canvas.toDataURL('image/jpeg', 0.88)
+}
 type SingState = 'idle' | 'countdown' | 'singing' | 'thinking'
 type Stage = 'compose' | 'recording' | 'saving' | 'saved'
 
@@ -166,6 +177,49 @@ export function AddSong() {
     setSing('idle')
   }
 
+  const [photo, setPhoto] = useState<string | null>(null)
+  const [reading, setReading] = useState(false)
+
+  const choosePhoto = async (file: File | undefined) => {
+    if (!file) return
+    setError('')
+    setHeard('')
+    try {
+      setPhoto(await shrinkPhoto(file))
+    } catch {
+      setError('That file doesn’t look like a photo Plink can open.')
+    }
+  }
+
+  const readPhoto = async () => {
+    if (!photo) return
+    setReading(true)
+    setError('')
+    setHeard('Gemma is counting the notes on the card…')
+    try {
+      const r = await readCard(photo)
+      if (r.bars.length === 0) {
+        setHeard('')
+        setError('Gemma couldn’t find any notes on that card. Try a straighter, closer photo in good light.')
+        return
+      }
+      setBars(r.bars)
+      setBeats(r.beats)
+      setMisfits(r.flagged)
+      setSelected(null)
+      if (!title.trim() && r.title) setTitle(r.title)
+      const rows = r.counts.length > 1 ? `${r.counts.length} rows (${r.counts.join(' + ')} notes)` : `${r.bars.length} notes`
+      const check = r.flagged.length ? ` ${r.flagged.length} dashed ${r.flagged.length === 1 ? 'note' : 'notes'} didn’t match ${r.flagged.length === 1 ? 'its' : 'their'} colour: check against the photo.` : ''
+      const lost = r.unreadable ? ` ${r.unreadable} couldn’t be read.` : ''
+      setHeard(`Gemma read ${rows} in ${Math.round(r.seconds)}s.${check}${lost}`)
+    } catch (e) {
+      setHeard('')
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setReading(false)
+    }
+  }
+
   const duplicate = (i: number) => {
     setBars((b) => [...b.slice(0, i + 1), b[i], ...b.slice(i + 1)])
     setBeats((b) => [...b.slice(0, i + 1), b[i], ...b.slice(i + 1)])
@@ -185,7 +239,7 @@ export function AddSong() {
     setError('')
     setStage('saving')
     try {
-      const song = await createSong({ title: title.trim(), source: route === 'play' ? 'played' : route === 'sing' ? 'hummed' : 'typed', bars, beats })
+      const song = await createSong({ title: title.trim(), source: route === 'play' ? 'played' : route === 'sing' ? 'hummed' : route === 'photo' ? 'photo' : 'typed', bars, beats })
       const lesson = await buildLesson(song.id)
       setSaved(lesson)
       bumpData()
@@ -301,6 +355,17 @@ export function AddSong() {
           </Button>
           <Button
             variant="secondary"
+            t={0}
+            role="tab"
+            aria-selected={route === 'photo'}
+            icon={<Camera aria-hidden />}
+            onClick={() => setRoute('photo')}
+            disabled={stage === 'recording' || sing !== 'idle' || reading}
+          >
+            From a photo
+          </Button>
+          <Button
+            variant="secondary"
             t={4}
             role="tab"
             aria-selected={route === 'type'}
@@ -369,6 +434,36 @@ export function AddSong() {
                   </Button>
                 )}
               </div>
+              {heard && <p className="bubble tone-1">{heard}</p>}
+            </div>
+          </div>
+        )}
+
+        {route === 'photo' && (
+          <div className="sing">
+            <Mascot mood={reading ? 'hint' : 'hello'} say={reading ? 'Hmm, counting…' : 'Show me the card!'} size={110} />
+            <div className="stack">
+              <p className="dim">
+                Toy xylophones come with colour or number song cards. Take a photo of one (or of a songbook page with note letters),
+                and Gemma reads it right here on this laptop. The photo isn’t kept.
+              </p>
+              <div className="row">
+                <label className="btn btn-outline tone-0 file-btn">
+                  <Camera aria-hidden /> {photo ? 'Another photo' : 'Choose or take a photo'}
+                  <input type="file" accept="image/*" capture="environment" onChange={(e) => void choosePhoto(e.target.files?.[0])} />
+                </label>
+                {photo && (
+                  <Button
+                    variant="primary"
+                    icon={reading ? <span className="spinner" aria-hidden /> : <ScanEye aria-hidden />}
+                    onClick={() => void readPhoto()}
+                    disabled={reading}
+                  >
+                    {reading ? 'Gemma is reading… about 30 s' : 'Read it with Gemma'}
+                  </Button>
+                )}
+              </div>
+              {photo && <img className="card-photo" src={photo} alt="The song card you chose" />}
               {heard && <p className="bubble tone-1">{heard}</p>}
             </div>
           </div>

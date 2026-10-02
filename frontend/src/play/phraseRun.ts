@@ -23,6 +23,7 @@ export interface AttemptRow {
   wrong_before_correct: number
   first_try_correct: boolean
   help_level: HelpLevel
+  predicted_success: number | null
 }
 
 export interface PhraseSpec {
@@ -35,6 +36,8 @@ export interface PhraseSpec {
   /** performance.now() when the session started. */
   sessionStart: number
   helpLevel?: HelpLevel
+  /** TabPFN's first-try prediction per note, when TabPFN chose the part. */
+  predicted?: number[] | null
 }
 
 export type StrikeResult = 'right' | 'wrong' | 'complete' | 'ignored'
@@ -106,6 +109,7 @@ export function createPhraseRun(spec: PhraseSpec) {
         wrong_before_correct: wrong,
         first_try_correct: wrong === 0,
         help_level: helpLevel,
+        predicted_success: spec.predicted?.[pos] ?? null,
       })
       pos++
       return pos >= spec.bars.length ? 'complete' : 'right'
