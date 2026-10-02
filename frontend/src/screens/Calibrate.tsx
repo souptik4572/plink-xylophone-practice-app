@@ -1,10 +1,13 @@
+import { CircleAlert, Ear, Mic, RotateCcw, Undo2, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { saveInstrument } from '../api'
 import { audioConfig } from '../audio/audioConfig'
 import { listenForStrikes, recordNoiseFloor } from '../audio/mic'
 import { averageTemplate } from '../audio/templates'
-import type { Instrument } from '../instrument'
+import { isCalibrated, type Instrument } from '../instrument'
 import { Xylophone, type XylophoneHandle } from '../player/Xylophone'
+import { cn } from '../theme/palette'
+import { Button, Card, Chip } from '../ui/ui'
 
 const cfg = audioConfig.detection
 
@@ -20,7 +23,15 @@ type Phase = 'intro' | 'noise' | 'bars' | 'saving' | 'done' | 'error'
  * Calibration (spec 7.1): one second of room tone, then three strikes on
  * each bar, low to high. Each bar's averaged spectrum becomes its template.
  */
-export function Calibrate({ instrument, onSaved }: { instrument: Instrument; onSaved: (i: Instrument) => void }) {
+export function Calibrate({
+  instrument,
+  onSaved,
+  onDone,
+}: {
+  instrument: Instrument
+  onSaved: (i: Instrument) => void
+  onDone: () => void
+}) {
   const xylo = useRef<XylophoneHandle>(null)
   const [phase, setPhase] = useState<Phase>('intro')
   const [bar, setBar] = useState(0)
@@ -37,7 +48,7 @@ export function Calibrate({ instrument, onSaved }: { instrument: Instrument; onS
   useEffect(() => () => stopMic.current?.(), [])
 
   useEffect(() => {
-    xylo.current?.highlight(phase === 'bars' ? bar : null, null)
+    xylo.current?.highlight(phase === 'bars' ? bar : null, null, { target: true })
   }, [phase, bar])
 
   const goToBar = (i: number) => {
@@ -113,74 +124,107 @@ export function Calibrate({ instrument, onSaved }: { instrument: Instrument; onS
     setPhase('intro')
   }
 
+  const current = instrument.bars[bar]
+
   return (
-    <section className="screen">
-      <div className="screen-head">
-        <h2>Calibrate her xylophone</h2>
-      </div>
-
-      <Xylophone ref={xylo} instrument={instrument} keyboard={false} showKeyCaps={false} />
-
-      <div className="panel prompt">
+    <div className="tool">
+      <Card t={1} pattern="mesh" className="stack tool-card" aria-live="polite">
         {phase === 'intro' && (
           <>
-            <p>
-              Plink learns the sound of <em>her</em> bars. Find a quiet moment, put the laptop near the
-              xylophone, and keep the mallet handy. It takes under a minute.
-            </p>
-            <button type="button" className="primary" onClick={start}>
-              Start
-            </button>
-          </>
-        )}
-        {phase === 'noise' && <p className="say">Shh… listening to the room</p>}
-        {phase === 'bars' && (
-          <>
-            <p className="say">
-              Hit <strong style={{ color: instrument.bars[bar].colour }}>{instrument.bars[bar].label}</strong>{' '}
-              {cfg.strikesPerBar} times
-            </p>
-            <p className="dots" aria-label={`${hits} of ${cfg.strikesPerBar}`}>
-              {Array.from({ length: cfg.strikesPerBar }, (_, k) => (k < hits ? '●' : '○')).join(' ')}
-            </p>
-            <p className="muted">
-              Bar {bar + 1} of {n}
+            <div className="card-head">
+              <h3 className="card-title">Teach Plink her xylophone</h3>
+              {isCalibrated(instrument) && <Chip t={1} solid>Learned ✓</Chip>}
+            </div>
+            <p className="dim">
+              Plink learns the sound of <em>her</em> bars, through this laptop’s microphone in this room. Toy xylophones are rarely
+              in tune, so Plink learns her instrument’s own sound instead of guessing notes. Find a quiet moment and keep
+              the mallet handy. It takes under a minute.
             </p>
             <div className="row">
-              <button type="button" onClick={() => goToBar(bar)}>
-                Redo this bar
-              </button>
-              {bar > 0 && (
-                <button type="button" onClick={() => goToBar(bar - 1)}>
-                  Back a bar
-                </button>
-              )}
-              <button type="button" onClick={cancel}>
-                Cancel
-              </button>
+              <Button variant="primary" icon={<Mic aria-hidden />} onClick={start}>
+                Start
+              </Button>
             </div>
           </>
         )}
-        {phase === 'saving' && <p>Saving…</p>}
+        {phase === 'noise' && (
+          <p className="say-big display">
+            <Ear aria-hidden /> Shh… listening to the room
+          </p>
+        )}
+        {phase === 'bars' && (
+          <>
+            <p className="say-big display">
+              Hit{' '}
+              <span className="bar-name" style={{ background: current.colour }}>
+                {current.label}
+              </span>{' '}
+              {cfg.strikesPerBar} times
+            </p>
+            <p className="hit-dots" aria-label={`${hits} of ${cfg.strikesPerBar}`}>
+              {Array.from({ length: cfg.strikesPerBar }, (_, k) => (
+                <span key={k} className={cn('hit-dot', k < hits && 'on')} style={{ background: k < hits ? current.colour : undefined }} />
+              ))}
+            </p>
+            <ol className="bar-progress" aria-label={`Bar ${bar + 1} of ${n}`}>
+              {instrument.bars.map((b, i) => (
+                <li key={i} className={cn(i < bar && 'done', i === bar && 'now')} style={{ background: i <= bar ? b.colour : undefined }} />
+              ))}
+            </ol>
+            {message && (
+              <p className="alert">
+                <CircleAlert aria-hidden /> {message}
+              </p>
+            )}
+            <div className="row">
+              <Button variant="secondary" size="sm" t={2} icon={<RotateCcw aria-hidden size={18} />} onClick={() => goToBar(bar)}>
+                Redo this bar
+              </Button>
+              {bar > 0 && (
+                <Button variant="secondary" size="sm" t={3} icon={<Undo2 aria-hidden size={18} />} onClick={() => goToBar(bar - 1)}>
+                  Back a bar
+                </Button>
+              )}
+              <Button variant="ghost" size="sm" t={0} icon={<X aria-hidden size={18} />} onClick={cancel}>
+                Cancel
+              </Button>
+            </div>
+          </>
+        )}
+        {phase === 'saving' && (
+          <p className="row">
+            <span className="spinner" aria-hidden /> Saving…
+          </p>
+        )}
         {phase === 'done' && (
           <>
-            <p className="say">All {n} bars learned.</p>
-            <p>Next, run the self-test to check Plink hears every bar correctly.</p>
-            <button type="button" onClick={() => setPhase('intro')}>
-              Calibrate again
-            </button>
+            <p className="say-big display gradient-text">All {n} bars learned!</p>
+            <p className="dim">Next, the mic check makes sure Plink hears every bar correctly.</p>
+            <div className="row">
+              <Button variant="primary" icon={<Ear aria-hidden />} onClick={onDone}>
+                Run the mic check
+              </Button>
+              <Button variant="ghost" t={1} onClick={() => setPhase('intro')}>
+                Calibrate again
+              </Button>
+            </div>
           </>
         )}
         {phase === 'error' && (
           <>
-            <p>{message}</p>
-            <button type="button" onClick={() => setPhase('intro')}>
-              Try again
-            </button>
+            <p className="alert" role="alert">
+              <CircleAlert aria-hidden /> {message}
+            </p>
+            <div className="row">
+              <Button variant="outline" t={3} onClick={() => setPhase('intro')}>
+                Try again
+              </Button>
+            </div>
           </>
         )}
-        {message && phase === 'bars' && <p className="warn">{message}</p>}
-      </div>
-    </section>
+      </Card>
+
+      <Xylophone ref={xylo} instrument={instrument} keyboard={false} showKeyCaps={false} />
+    </div>
   )
 }

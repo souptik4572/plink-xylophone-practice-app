@@ -69,3 +69,27 @@ The user chose to defer the milestone 2 gate ("let us focus on the overall imple
 - **Gemma invents names.** With `CHILD_NAME` empty, both the praise lines and the parent note called her "Lily". The prompts now say "never invent a name" and use "your child". They also say not to mention jumps when there is no data for them (tester rows never feed her model).
 - Acceptance: a new played-in 18-note tune became a 4-phrase Gemma lesson ("Little Bird Chirp", "Bouncy Ball Hop", …) in 11.9 s. Test rows removed afterwards. The user's own browser sessions (2 and 3, logged as `child` before the tester switch existed) were left alone.
 - Tests: 124 pytest, 56 vitest.
+
+## Redesign — Maximalism / Dopamine (Fri 2 Oct)
+
+The user asked for the whole frontend restyled to `DESIGN_PROMPT.xml` (Maximalism / Dopamine), with the UX "super easy to use" and richer features, before milestone 6.
+
+- **One design decision worth writing up:** maximalism (sensory overload, constant motion) fights a game where a small child must find one glowing bar. Everything around the game is loud; during a phrase the page goes into focus. Floating shapes and background words hide, the nav dims, the other bars drop to 55 % opacity, and the target glows in its own colour with a bouncing pointer above it. Her bars keep her instrument's real colours rather than the five design accents, because the spoken hints name those colours.
+- **System:** all tokens are CSS variables (`theme/tokens.css`); colour rotation is `tone-0…4` classes (accent, clashing border, two shadow colours, and the ink that reads on the accent); there are pattern, shadow and animation utilities; and the primitives are `Button` (primary, secondary, outline, ghost), `Card`, `Field`, `Switch`, `Chip`, `Deco` (floating shapes and outline background words) and confetti. Still plain CSS, as the spec says, with no Tailwind.
+- **Offline:** fonts (Outfit, DM Sans, Bungee) are self-hosted from Fontsource, not Google Fonts, so the no-network rule holds.
+- **Information architecture:** Home, Play, Free play, Songs, Grown-ups, with hash routes so refresh and bookmarks work. On phones the nav becomes a bottom tab bar.
+  - Home: a one-tap "Let's play!" that starts her last song (spec: "one-click start"), song picks, streak, notes and first-try tiles, the last parent note, and a getting-started checklist.
+  - Songs: a library with Practise, Listen and "new Gemma lesson" per song.
+  - Grown-ups: Progress (stat tiles plus TabPFN's trickiest jumps as meters), Settings, Calibrate, Mic check, Data.
+- **New backend:** `GET/PUT /api/settings`. The spec's parent settings, session length and drill target, were previously `.env` only; name, language, speaking voice, calm mode and key caps join them. `GET /api/progress` returns totals, a day streak and the weakest jumps. Delete-all also clears settings.
+- **Celebrations:** confetti, the praise line on screen, and one star per note right first time. A sparkle on each right note.
+- **Calm mode** (a Grown-ups switch) and `prefers-reduced-motion` both stop continuous motion, confetti and decorations; colours and borders stay.
+- **Verified with headless Chrome** (puppeteer-core driving the local Chrome; screenshots at 1366 and 390 px wide, plus a scripted Play run as a tester). First-pass bugs it caught:
+  - the celebration sat below the fold at laptop height, so the stage now shrinks the xylophone when a phrase ends;
+  - heading words ran together ("PICKASONG"), so headings got extra word spacing;
+  - decorations sat on top of a switch and the hero copy;
+  - the hero button overflowed on phones;
+  - the song-card colour strips collapsed to zero width;
+  - "1 days".
+- **Latent bug fixed:** the first note of a session was presented before the xylophone mounted, so its glow could be missed. It is now presented after mount.
+- Tests: 132 pytest, 59 vitest.

@@ -12,7 +12,7 @@ from sqlmodel import Session, col, func, select
 from app import config
 from app.features import FEATURES, LABEL, candidate_rows, frame
 from app.fitter import fit_song, parse_notes
-from app.models import Attempt, Song, bar_offsets, song_phrases
+from app.models import Attempt, Song, bar_offsets, get_settings, song_phrases
 
 log = logging.getLogger("plink.drill")
 
@@ -50,7 +50,13 @@ def choose(expected: list[float], exclude: int | None, target: float = config.DR
     return min(options, key=lambda i: (round(abs(expected[i] - target), 9), i))
 
 
-def pick(history: pd.DataFrame, cands: list[Candidate], last: tuple[str, int] | None, model=tabpfn_model) -> Pick:
+def pick(
+    history: pd.DataFrame,
+    cands: list[Candidate],
+    last: tuple[str, int] | None,
+    model=tabpfn_model,
+    target: float = config.DRILL_TARGET,
+) -> Pick:
     keys = [(c.song_id, c.phrase_idx) for c in cands]
     last_i = keys.index(last) if last in keys else None
 
@@ -65,7 +71,7 @@ def pick(history: pd.DataFrame, cands: list[Candidate], last: tuple[str, int] | 
     for c in cands:
         expected.append(float(proba[at : at + len(c.rows)].mean()))
         at += len(c.rows)
-    i = choose(expected, last_i)
+    i = choose(expected, last_i, target)
     return Pick(cands[i].song_id, cands[i].phrase_idx, "tabpfn", expected[i], time.perf_counter() - t)
 
 
@@ -146,7 +152,8 @@ def _compute(db: Session, session_id: int, song_id: str | None, last: Attempt | 
 
     child = db.exec(select(Attempt).where(Attempt.player == "child")).all()
     history = frame([r.model_dump(include={*FEATURES, LABEL}) for r in child])
-    result = pick(history, cands, (last.song_id, last.phrase_idx) if last else None)
+    target = get_settings(db).drill_target
+    result = pick(history, cands, (last.song_id, last.phrase_idx) if last else None, target=target)
     if result.source == "tabpfn":
         log.info("TabPFN picked %s #%d (p=%.2f) in %.2fs on %d rows", result.song_id, result.phrase_idx, result.expected_success, result.seconds, len(history))
     return result

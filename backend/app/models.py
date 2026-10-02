@@ -67,6 +67,23 @@ class Attempt(SQLModel, table=True):
     created_at: datetime = Field(default_factory=_now)
 
 
+class Settings(SQLModel, table=True):
+    """The grown-ups' settings: one row. Defaults come from .env."""
+
+    id: int = Field(default=1, primary_key=True)
+    child_name: str = config.CHILD_NAME
+    home_language: str = config.HOME_LANGUAGE
+    speech_lang: str = config.SPEECH_LANG
+    session_minutes: float = config.SESSION_MINUTES
+    drill_target: float = config.DRILL_TARGET
+    calm_mode: bool = False
+    show_key_caps: bool = True
+
+
+def get_settings(db: Session) -> Settings:
+    return db.get(Settings, 1) or Settings()
+
+
 def bar_offsets(db: Session) -> list[int]:
     row = db.get(InstrumentRow, 1)
     return [b["semitone_offset"] for b in row.bars] if row else config.DEFAULT_OFFSETS

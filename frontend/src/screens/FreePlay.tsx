@@ -1,88 +1,97 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { listSongs } from '../api'
-import type { Instrument } from '../instrument'
+import { Headphones, Info, Keyboard } from 'lucide-react'
+import { useMemo, useRef, useState } from 'react'
+import { useApp } from '../app/AppContext'
+import { useSongs } from '../app/useSongs'
 import { ReplayControls } from '../player/ReplayControls'
 import { Xylophone, type XylophoneHandle } from '../player/Xylophone'
-import { offlineSongs, replayNotes, type ApiSong } from '../songs/songs'
+import { replayNotes } from '../songs/songs'
+import { cn, tone } from '../theme/palette'
+import { Deco } from '../ui/Deco'
+import { Card, ScreenTitle, Switch } from '../ui/ui'
 
-/** Her instrument to play freely, plus the song library: any tune or phrase replays with bars lighting. */
-export function FreePlay({ instrument }: { instrument: Instrument }) {
+/** Her instrument to play freely, and any tune or part of one replayed with bars lighting in time. */
+export function FreePlay({ songId: initialSong }: { songId?: string }) {
+  const { instrument, settings } = useApp()
+  const { songs } = useSongs()
   const xylo = useRef<XylophoneHandle>(null)
-  const [showKeys, setShowKeys] = useState(true)
-  const [songs, setSongs] = useState<ApiSong[]>(() => offlineSongs(instrument))
-  const [songId, setSongId] = useState('twinkle')
+  const [showKeys, setShowKeys] = useState(settings.show_key_caps)
+  const [songId, setSongId] = useState(initialSong ?? 'twinkle')
   const [phraseIdx, setPhraseIdx] = useState(-1)
 
-  useEffect(() => {
-    listSongs()
-      .then(setSongs)
-      .catch(() => {}) // server down: the offline built-ins still play
-  }, [])
-
-  const song = songs.find((s) => s.id === songId) ?? songs[0]
+  const song = songs?.find((s) => s.id === songId) ?? songs?.[0]
   const phrase = phraseIdx >= 0 ? song?.phrases[phraseIdx] : undefined
   const notes = useMemo(() => (song ? replayNotes(song, phrase) : []), [song, phrase])
 
-  // Hand the home-row keys back to the xylophone after picking from a list.
-  const pick = (fn: () => void) => (e: React.ChangeEvent<HTMLSelectElement>) => {
-    fn()
-    e.target.blur()
-  }
-
   return (
-    <section className="screen">
-      <div className="screen-head">
-        <h2>Free play</h2>
-        <label className="toggle">
-          <input type="checkbox" checked={showKeys} onChange={(e) => setShowKeys(e.target.checked)} />
-          Show keys
-        </label>
+    <section className="screen free">
+      <Deco
+        items={[
+          { shape: 'note', at: { top: '0%', right: '28%' }, size: 44, t: 1, motion: 'float', wide: true },
+          { shape: 'sparkle', at: { top: '0%', left: '44%' }, size: 34, t: 2, motion: 'spin-slow', wide: true },
+          { emoji: '🥁', at: { top: '2%', left: '58%' }, size: 34, t: 0, motion: 'wiggle', wide: true },
+        ]}
+      />
+      <div className="screen-row">
+        <ScreenTitle kicker="Free play" t={3}>
+          Jam <span className="gradient-text">time</span>
+        </ScreenTitle>
+        <Switch t={2} checked={showKeys} onChange={(e) => setShowKeys(e.target.checked)} label={<><Keyboard aria-hidden size={18} /> Show keys</>} />
       </div>
 
       <Xylophone ref={xylo} instrument={instrument} showKeyCaps={showKeys} />
 
-      <div className="panel">
-        <div className="row">
-          <label className="song-pick">
-            Listen to
-            <select
-              value={song?.id}
-              onChange={(e) =>
-                pick(() => {
-                  setSongId(e.target.value)
+      {song && (
+        <Card t={1} pattern="checker" className="listen stack">
+          <div className="card-head">
+            <span className="label">
+              <Headphones aria-hidden size={16} /> Listen and watch
+            </span>
+          </div>
+          <div className="chip-row" role="group" aria-label="Song">
+            {songs?.map((s, i) => (
+              <button
+                key={s.id}
+                type="button"
+                aria-pressed={s.id === song.id}
+                className={cn('btn btn-secondary btn-sm', tone(i))}
+                onClick={(e) => {
+                  setSongId(s.id)
                   setPhraseIdx(-1)
-                })(e)
-              }
-            >
-              {songs.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.title}
-                </option>
+                  e.currentTarget.blur() // hand the home-row keys back to the xylophone
+                }}
+              >
+                {s.title}
+              </button>
+            ))}
+          </div>
+          {song.phrases.length > 0 && (
+            <div className="chip-row" role="group" aria-label="Part">
+              <span className="faint small">Part:</span>
+              {[{ nickname: 'Whole song' }, ...song.phrases].map((p, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  aria-pressed={phraseIdx === i - 1}
+                  className={cn('btn btn-ghost btn-sm', tone(i + 2))}
+                  onClick={(e) => {
+                    setPhraseIdx(i - 1)
+                    e.currentTarget.blur()
+                  }}
+                >
+                  {p.nickname}
+                </button>
               ))}
-            </select>
-          </label>
-          {song && song.phrases.length > 0 && (
-            <label className="song-pick">
-              Part
-              <select value={phraseIdx} onChange={(e) => pick(() => setPhraseIdx(Number(e.target.value)))(e)}>
-                <option value={-1}>Whole song</option>
-                {song.phrases.map((p, i) => (
-                  <option key={i} value={i}>
-                    {p.nickname}
-                  </option>
-                ))}
-              </select>
-            </label>
+            </div>
           )}
-        </div>
-        {song && song.misfits.length > 0 && (
-          <p className="muted">
-            Almost fits: {song.misfits.length} note{song.misfits.length > 1 ? 's' : ''} need a bar she doesn't have,
-            so they play on the nearest one (marked ≈).
-          </p>
-        )}
-        {song && <ReplayControls notes={notes} instrument={instrument} xylo={xylo} />}
-      </div>
+          {song.misfits.length > 0 && (
+            <p className="row small dim">
+              <Info aria-hidden size={18} /> Almost fits: {song.misfits.length} note{song.misfits.length > 1 ? 's' : ''} need a bar she
+              doesn’t have, so they play on the nearest one (marked ≈).
+            </p>
+          )}
+          <ReplayControls notes={notes} instrument={instrument} xylo={xylo} />
+        </Card>
+      )}
     </section>
   )
 }

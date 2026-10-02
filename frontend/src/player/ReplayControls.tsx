@@ -1,3 +1,4 @@
+import { Footprints, Pause, Play, Repeat, RotateCcw, SkipForward } from 'lucide-react'
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import { audioConfig } from '../audio/audioConfig'
 import { audioNow, getAudioContext, playTone } from '../audio/synth'
@@ -6,6 +7,7 @@ import { strikeBus } from './barStrike'
 import { isTextEntry } from './keymap'
 import { PlaybackDriver, type PlaybackStatus, type ReplayNote } from './playback'
 import type { XylophoneHandle } from './Xylophone'
+import { Button } from '../ui/ui'
 
 interface Props {
   notes: ReplayNote[]
@@ -78,56 +80,68 @@ export function ReplayControls({ notes, instrument, xylo, shortcuts = true }: Pr
 
   const playing = status === 'playing'
   return (
-    <div className="replay" role="group" aria-label="Replay">
-      <button type="button" className="big" onClick={toggle} disabled={stepMode} aria-keyshortcuts="Space">
-        {playing ? '❚❚ Pause' : '▶ Play'}
-      </button>
-      <button type="button" onClick={restart} disabled={stepMode}>
-        ⟲ Restart
-      </button>
-      <label className="toggle">
-        <input
-          type="checkbox"
-          checked={loop}
-          onChange={(e) => {
-            setLoop(e.target.checked)
-            driver.current?.engine.setLoop(e.target.checked)
-          }}
-        />
+    <div className="deck" role="group" aria-label="Replay">
+      <Button
+        variant="primary"
+        size="lg"
+        className="deck-play"
+        onClick={toggle}
+        disabled={stepMode}
+        aria-keyshortcuts="Space"
+        icon={playing ? <Pause aria-hidden /> : <Play aria-hidden />}
+      >
+        {playing ? 'Pause' : 'Play'}
+      </Button>
+      <Button variant="outline" t={1} iconOnly icon={<RotateCcw aria-hidden />} onClick={restart} disabled={stepMode}>
+        Restart
+      </Button>
+      <Button
+        variant="secondary"
+        t={2}
+        size="sm"
+        icon={<Repeat aria-hidden size={18} />}
+        aria-pressed={loop}
+        onClick={() => {
+          setLoop(!loop)
+          driver.current?.engine.setLoop(!loop)
+        }}
+      >
         Loop
-      </label>
-      <div className="seg" role="radiogroup" aria-label="Tempo">
-        {audioConfig.playback.tempos.map((t) => (
-          <button
+      </Button>
+      <div className="seg" role="group" aria-label="Speed">
+        {audioConfig.playback.tempos.map((t, i) => (
+          <Button
             key={t}
-            type="button"
-            role="radio"
-            aria-checked={tempo === t}
-            className={tempo === t ? 'on' : ''}
+            variant="secondary"
+            size="sm"
+            t={i + 3}
+            aria-pressed={tempo === t}
             onClick={() => {
               setTempo(t)
               driver.current?.engine.setTempo(t)
             }}
           >
-            {t}×
-          </button>
+            {t === 1 ? 'Normal' : t === 0.5 ? 'Slow' : 'Medium'}
+          </Button>
         ))}
       </div>
-      <label className="toggle">
-        <input
-          type="checkbox"
-          checked={stepMode}
-          onChange={(e) => {
-            setStepMode(e.target.checked)
-            if (e.target.checked) driver.current?.engine.pause()
-          }}
-        />
-        Step
-      </label>
+      <Button
+        variant="secondary"
+        t={0}
+        size="sm"
+        icon={<Footprints aria-hidden size={18} />}
+        aria-pressed={stepMode}
+        onClick={() => {
+          setStepMode(!stepMode)
+          if (!stepMode) driver.current?.engine.pause()
+        }}
+      >
+        One at a time
+      </Button>
       {stepMode && (
-        <button type="button" className="big" onClick={step} aria-keyshortcuts="Enter">
-          Next note ⏎
-        </button>
+        <Button variant="outline" t={4} onClick={step} aria-keyshortcuts="Enter" icon={<SkipForward aria-hidden />}>
+          Next note
+        </Button>
       )}
     </div>
   )

@@ -137,3 +137,9 @@ def test_session_stats():
     assert stats["replays"] == 2
     assert stats["first_try_pct"] == round(100 * sum(r["first_try_correct"] for r in rows) / 8)
     assert stats["avg_response_ms"] == 1350
+
+
+def test_target_is_a_parent_setting():
+    # With target 0.95 the no-jump phrase wins; with 0.80 the smooth one does.
+    assert pick(history(200), cands(JUMPY, SMOOTH, REPEAT), last=None, model=JumpModel, target=0.95).phrase_idx == 2
+    assert pick(history(200), cands(JUMPY, SMOOTH, REPEAT), last=None, model=JumpModel, target=0.80).phrase_idx == 1

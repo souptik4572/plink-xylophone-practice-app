@@ -1,9 +1,12 @@
+import { CircleAlert, Ear, Square } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { audioConfig } from '../audio/audioConfig'
 import { listenForStrikes } from '../audio/mic'
 import { confusionGrid, matchSpectrum, type Match } from '../audio/matcher'
 import { isCalibrated, type Instrument } from '../instrument'
 import { Xylophone, type XylophoneHandle } from '../player/Xylophone'
+import { cn } from '../theme/palette'
+import { Button, Card, Chip } from '../ui/ui'
 
 const cfg = audioConfig.detection
 
@@ -13,7 +16,7 @@ interface Trial {
 }
 
 /** Self-test (spec 7.2): each bar struck five times, shown as a confusion grid. Gate: 36 of 40. */
-export function SelfTest({ instrument }: { instrument: Instrument }) {
+export function SelfTest({ instrument, onCalibrate }: { instrument: Instrument; onCalibrate: () => void }) {
   const xylo = useRef<XylophoneHandle>(null)
   const [trials, setTrials] = useState<Trial[]>([])
   const [running, setRunning] = useState(false)
@@ -31,7 +34,7 @@ export function SelfTest({ instrument }: { instrument: Instrument }) {
   useEffect(() => () => stopMic.current?.(), [])
 
   useEffect(() => {
-    xylo.current?.highlight(running && !finished ? target : null, null)
+    xylo.current?.highlight(running && !finished ? target : null, null, { target: true })
   }, [running, finished, target])
 
   const stop = () => {
@@ -68,12 +71,15 @@ export function SelfTest({ instrument }: { instrument: Instrument }) {
 
   if (!isCalibrated(instrument)) {
     return (
-      <section className="screen">
-        <h2>Self-test</h2>
-        <div className="panel">
-          <p>Calibrate the xylophone first.</p>
+      <Card t={3} border="dashed" pattern="stripes" className="stack tool-card">
+        <h3 className="card-title">Mic check</h3>
+        <p className="dim">Teach Plink her xylophone first. Then this checks that it hears every bar correctly.</p>
+        <div className="row">
+          <Button variant="primary" icon={<Ear aria-hidden />} onClick={onCalibrate}>
+            Calibrate
+          </Button>
         </div>
-      </section>
+      </Card>
     )
   }
 
@@ -81,73 +87,85 @@ export function SelfTest({ instrument }: { instrument: Instrument }) {
   const passed = correct >= gate
 
   return (
-    <section className="screen">
-      <div className="screen-head">
-        <h2>Self-test</h2>
-        <span className="muted">
-          Pass: {gate} of {total} correct
-        </span>
-      </div>
-
-      <Xylophone ref={xylo} instrument={instrument} keyboard={false} showKeyCaps={false} />
-
-      <div className="panel prompt">
+    <div className="tool">
+      <Card t={0} pattern="mesh" className="stack tool-card" aria-live="polite">
+        <div className="card-head">
+          <h3 className="card-title">Mic check</h3>
+          <Chip t={2}>
+            Pass: {gate} of {total}
+          </Chip>
+        </div>
         {!running && !finished && (
           <>
-            <p>
-              Hit each bar {cfg.selfTestStrikesPerBar} times when it glows, low to high. Unsure strikes count as
-              misses.
+            <p className="dim">
+              Hit each glowing bar {cfg.selfTestStrikesPerBar} times, low to high. Strikes Plink isn’t sure about count as misses.
+              If it passes, her real xylophone can be the main way to play.
             </p>
-            <button type="button" className="primary" onClick={start}>
-              Start self-test
-            </button>
+            <div className="row">
+              <Button variant="primary" icon={<Ear aria-hidden />} onClick={start}>
+                Start the check
+              </Button>
+            </div>
           </>
         )}
         {running && !finished && (
           <>
-            <p className="say">
-              Hit <strong style={{ color: instrument.bars[target].colour }}>{instrument.bars[target].label}</strong>{' '}
-              ({(trials.length % cfg.selfTestStrikesPerBar) + 1} of {cfg.selfTestStrikesPerBar})
+            <p className="say-big display">
+              Hit{' '}
+              <span className="bar-name" style={{ background: instrument.bars[target].colour }}>
+                {instrument.bars[target].label}
+              </span>{' '}
+              · {(trials.length % cfg.selfTestStrikesPerBar) + 1} of {cfg.selfTestStrikesPerBar}
             </p>
-            <button type="button" onClick={stop}>
-              Stop
-            </button>
+            <div className="row">
+              <Button variant="ghost" size="sm" t={3} icon={<Square aria-hidden size={18} />} onClick={stop}>
+                Stop
+              </Button>
+            </div>
           </>
         )}
         {finished && (
           <>
-            <p className={`say ${passed ? 'pass' : 'fail'}`}>
-              {correct} of {total} correct: {passed ? 'passed' : 'below the gate'}
+            <p className={cn('say-big display', passed ? 'gradient-text' : 'fail-text')}>
+              {correct} of {total}: {passed ? 'passed!' : 'not yet'}
             </p>
             {!passed && (
-              <p>
-                Try calibrating again somewhere quieter, with the laptop closer. If it still misses, use the on-screen
-                xylophone and treat the microphone as beta.
+              <p className="dim">
+                Try calibrating again somewhere quieter, with the laptop closer. If it still misses, keep playing on screen: the
+                microphone stays beta.
               </p>
             )}
-            <button type="button" onClick={start}>
-              Run again
-            </button>
+            <div className="row">
+              <Button variant="outline" t={1} onClick={start}>
+                Run again
+              </Button>
+            </div>
           </>
         )}
         {last && (
-          <p className="muted">
-            Last strike: {last.bar === null ? 'unsure' : instrument.bars[last.bar].label} · score{' '}
-            {last.score.toFixed(2)} · margin {last.margin.toFixed(2)}
+          <p className="faint small">
+            Last strike: {last.bar === null ? 'unsure' : instrument.bars[last.bar].label} · match {last.score.toFixed(2)} · lead{' '}
+            {last.margin.toFixed(2)}
           </p>
         )}
-        {error && <p className="warn">{error}</p>}
-      </div>
+        {error && (
+          <p className="alert" role="alert">
+            <CircleAlert aria-hidden /> {error}
+          </p>
+        )}
+      </Card>
+
+      <Xylophone ref={xylo} instrument={instrument} keyboard={false} showKeyCaps={false} />
 
       {trials.length > 0 && (
-        <div className="panel">
+        <Card t={4} className="grid-card" border="dashed">
           <table className="confusion">
-            <caption>Rows: bar asked for. Columns: bar heard.</caption>
+            <caption className="faint small">Rows: the bar asked for. Columns: the bar Plink heard.</caption>
             <thead>
               <tr>
                 <th />
                 {instrument.bars.map((b, i) => (
-                  <th key={i} scope="col">
+                  <th key={i} scope="col" style={{ color: b.colour }}>
                     {b.label}
                   </th>
                 ))}
@@ -157,7 +175,9 @@ export function SelfTest({ instrument }: { instrument: Instrument }) {
             <tbody>
               {grid.map((row, i) => (
                 <tr key={i}>
-                  <th scope="row">{instrument.bars[i].label}</th>
+                  <th scope="row" style={{ color: instrument.bars[i].colour }}>
+                    {instrument.bars[i].label}
+                  </th>
                   {row.map((v, j) => (
                     <td key={j} className={v === 0 ? '' : i === j ? 'hit' : 'miss'}>
                       {v || ''}
@@ -167,8 +187,8 @@ export function SelfTest({ instrument }: { instrument: Instrument }) {
               ))}
             </tbody>
           </table>
-        </div>
+        </Card>
       )}
-    </section>
+    </div>
   )
 }

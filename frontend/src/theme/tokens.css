@@ -1,0 +1,100 @@
+/*
+ * Design tokens: Maximalism / Dopamine (DESIGN_PROMPT.xml).
+ * Every colour, font, radius, shadow and timing the app uses comes from here.
+ */
+:root {
+  color-scheme: dark;
+
+  --bg: #0d0d1a;
+  --fg: #ffffff;
+  --muted: #2d1b4e;
+  --muted-80: rgb(45 27 78 / 0.8);
+  --muted-50: rgb(45 27 78 / 0.5);
+  /* Body copy stays white; these are for descriptions and meta only. */
+  --fg-dim: rgb(255 255 255 / 0.82);
+  --fg-faint: rgb(255 255 255 / 0.64);
+  --ink: #0d0d1a;
+
+  /* The five accents. Decorative text, labels, borders, shadows: never body text. */
+  --c1: #ff3af2; /* magenta */
+  --c2: #00f5d4; /* cyan */
+  --c3: #ffe600; /* yellow */
+  --c4: #ff6b35; /* orange */
+  --c5: #7b2fff; /* purple */
+
+  --font-head: 'Outfit Variable', 'Outfit', ui-rounded, system-ui, sans-serif;
+  --font-body: 'DM Sans Variable', 'DM Sans', system-ui, sans-serif;
+  --font-display: 'Bungee', 'Outfit Variable', system-ui, sans-serif;
+
+  --r-pill: 9999px;
+  --r-card: 24px;
+  --r-box: 16px;
+
+  --glow: 0 0 20px rgb(255 58 242 / 0.5), 0 0 40px rgb(0 245 212 / 0.3);
+  --glow-lg: 0 0 40px rgb(255 58 242 / 0.6), 0 0 80px rgb(255 230 0 / 0.4), 0 0 120px rgb(123 47 255 / 0.3);
+
+  --ts-1: 2px 2px 0 var(--c5);
+  --ts-2: 2px 2px 0 var(--c5), 4px 4px 0 var(--c1);
+  --ts-3: 2px 2px 0 var(--c5), 4px 4px 0 var(--c1), 6px 6px 0 var(--c2);
+  --ts-mega: 4px 4px 0 var(--c5), 8px 8px 0 var(--c1), 12px 12px 0 var(--c2);
+
+  --rainbow: linear-gradient(90deg, var(--c1), var(--c2), var(--c3), var(--c1));
+
+  --ease-bounce: cubic-bezier(0.68, -0.55, 0.265, 1.55);
+  --t-fast: 200ms;
+  --t: 300ms;
+
+  --z-pattern: 0;
+  --z-content: 10;
+  --z-deco: 30;
+  --z-overlay: 40;
+  --z-nav: 50;
+
+  /* Default tone, overridden by .tone-N for colour rotation. */
+  --a: var(--c1);
+  --a-ink: var(--ink);
+  --b: var(--c3);
+  --s1: var(--c3);
+  --s2: var(--c2);
+}
+
+/*
+ * Colour rotation: index % 5. Each tone has its accent (--a), a clashing
+ * border (--b), two shadow colours, and the text colour that reads on it.
+ * White on magenta, cyan, yellow or orange fails contrast, so those take ink.
+ */
+.tone-0 {
+  --a: var(--c1);
+  --a-ink: var(--ink);
+  --b: var(--c3);
+  --s1: var(--c3);
+  --s2: var(--c2);
+}
+.tone-1 {
+  --a: var(--c2);
+  --a-ink: var(--ink);
+  --b: var(--c4);
+  --s1: var(--c1);
+  --s2: var(--c5);
+}
+.tone-2 {
+  --a: var(--c3);
+  --a-ink: var(--ink);
+  --b: var(--c1);
+  --s1: var(--c5);
+  --s2: var(--c2);
+}
+.tone-3 {
+  --a: var(--c4);
+  --a-ink: var(--ink);
+  --b: var(--c2);
+  --s1: var(--c5);
+  --s2: var(--c1);
+}
+.tone-4 {
+  --a: var(--c5);
+  --a-ink: var(--fg);
+  --b: var(--c3);
+  --s1: var(--c2);
+  --s2: var(--c1);
+}

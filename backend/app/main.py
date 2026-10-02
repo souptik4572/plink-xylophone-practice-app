@@ -3,6 +3,7 @@
 import importlib.util
 import json
 import threading
+from datetime import datetime, timedelta, timezone
 import uuid
 from contextlib import asynccontextmanager
 from typing import Annotated, Any, Literal
@@ -20,11 +21,13 @@ from app.models import (
     Attempt,
     InstrumentRow,
     PracticeSession,
+    Settings,
     Song,
     bar_labels,
     bar_offsets,
     engine,
     get_session,
+    get_settings,
     init_db,
     song_phrases,
 )
@@ -59,17 +62,38 @@ def health() -> dict:
     except httpx.HTTPError:
         ollama = False
     tabpfn = importlib.util.find_spec("tabpfn") is not None
-    return {
-        "ok": True,
-        "ollama": ollama,
-        "gemma_model": config.GEMMA_MODEL,
-        "tabpfn": tabpfn,
-        "session_minutes": config.SESSION_MINUTES,
-        "drill_target": config.DRILL_TARGET,
-        "child_name": config.CHILD_NAME,
-        "home_language": config.HOME_LANGUAGE,
-        "speech_lang": config.SPEECH_LANG,
-    }
+    return {"ok": True, "ollama": ollama, "gemma_model": config.GEMMA_MODEL, "tabpfn": tabpfn}
+
+
+class SettingsIn(BaseModel):
+    child_name: str | None = Field(default=None, max_length=40)
+    home_language: str | None = Field(default=None, min_length=2, max_length=40)
+    speech_lang: str | None = Field(default=None, max_length=20)
+    session_minutes: float | None = Field(default=None, ge=1, le=30)
+    drill_target: float | None = Field(default=None, ge=0.5, le=0.95)
+    calm_mode: bool | None = None
+    show_key_caps: bool | None = None
+
+
+def settings_out(s: Settings) -> dict[str, Any]:
+    return s.model_dump(exclude={"id"})
+
+
+@app.get("/api/settings")
+def read_settings(db: SessionDep) -> dict[str, Any]:
+    return settings_out(get_settings(db))
+
+
+@app.put("/api/settings")
+def write_settings(body: SettingsIn, db: SessionDep) -> dict[str, Any]:
+    s = get_settings(db)
+    for key, value in body.model_dump(exclude_none=True).items():
+        setattr(s, key, value.strip() if isinstance(value, str) else value)
+    db.add(s)
+    db.commit()
+    db.refresh(s)
+    drill.clear_cache()
+    return settings_out(s)
 
 
 
@@ -245,23 +269,51 @@ def write_parent_note(session_id: int, db: SessionDep) -> dict[str, Any]:
         raise HTTPException(409, "Nothing was played in this session")
     stats = session_stats(rows)
     weak = drill.weakest_jumps(child_history(db), bar_labels(db))
-    note = coach.parent_note(stats, weak, config.CHILD_NAME, config.HOME_LANGUAGE)
+    prefs = get_settings(db)
+    note = coach.parent_note(stats, weak, prefs.child_name, prefs.home_language)
     s.parent_note = note.text
     db.add(s)
     db.commit()
     return {"note": note.text, "source": note.source, "seconds": round(note.seconds, 1), "stats": stats, "weakest_jumps": weak}
 
 
+@app.get("/api/progress")
+def progress(db: SessionDep) -> dict[str, Any]:
+    """Her totals across child sessions, plus the jumps TabPFN expects her to find hardest."""
+    rows = db.exec(select(Attempt).where(Attempt.player == "child")).all()
+    sessions = {r.session_id for r in rows}
+    started = db.exec(select(PracticeSession.started_at).where(col(PracticeSession.id).in_(sessions))).all()
+    days = sorted({d.date() for d in started}, reverse=True)
+    streak, expect = 0, datetime.now(timezone.utc).date()
+    if days and days[0] < expect:
+        expect -= timedelta(days=1)  # a streak survives until she misses a whole day
+    for d in days:
+        if d != expect:
+            break
+        streak += 1
+        expect -= timedelta(days=1)
+    n = len(rows)
+    return {
+        "sessions": len(sessions),
+        "notes": n,
+        "first_try_pct": round(100 * sum(r.first_try_correct for r in rows) / n) if n else 0,
+        "practice_days": len(days),
+        "streak_days": streak,
+        "weakest_jumps": drill.weakest_jumps(child_history(db), bar_labels(db)) if n else [],
+    }
+
+
 @app.post("/api/praise")
 def praise(db: SessionDep) -> dict[str, Any]:
-    p = coach.praise_lines(config.CHILD_NAME, config.HOME_LANGUAGE)
+    prefs = get_settings(db)
+    p = coach.praise_lines(prefs.child_name, prefs.home_language)
     return {"lines": p.lines, "source": p.source}
 
 
 @app.delete("/api/data")
 def delete_all_data(db: SessionDep) -> dict[str, bool]:
     """The Parent screen's "delete all data": every attempt, session, added song and calibration."""
-    for model in (Attempt, PracticeSession, InstrumentRow):
+    for model in (Attempt, PracticeSession, InstrumentRow, Settings):
         for row in db.exec(select(model)).all():
             db.delete(row)
     for song in db.exec(select(Song)).all():

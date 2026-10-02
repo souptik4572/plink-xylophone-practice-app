@@ -1,0 +1,339 @@
+* {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  background: var(--bg);
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-body);
+  font-size: 1.125rem;
+  line-height: 1.625;
+  overflow-x: hidden;
+}
+
+/* Two fixed global patterns (mesh + dots, stripes) behind everything. */
+body::before,
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: var(--z-pattern);
+}
+
+body::before {
+  background:
+    radial-gradient(ellipse at 15% 20%, rgb(255 58 242 / 0.18) 0%, transparent 50%),
+    radial-gradient(ellipse at 85% 75%, rgb(0 245 212 / 0.14) 0%, transparent 50%),
+    radial-gradient(ellipse at 55% 45%, rgb(123 47 255 / 0.14) 0%, transparent 60%),
+    radial-gradient(circle, rgb(255 58 242 / 0.22) 1.2px, transparent 1.4px) 0 0 / 28px 28px;
+}
+
+body::after {
+  background-image: repeating-linear-gradient(
+    45deg,
+    transparent 0 12px,
+    rgb(255 230 0 / 0.035) 12px 24px
+  );
+}
+
+#root {
+  position: relative;
+  z-index: var(--z-content);
+}
+
+button,
+select,
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-head);
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: -0.02em;
+  /* Heavy uppercase Outfit runs words together without it. */
+  word-spacing: 0.16em;
+  line-height: 1;
+  margin: 0;
+}
+
+p {
+  margin: 0;
+}
+
+a {
+  color: var(--c2);
+}
+
+code,
+kbd {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+}
+
+/* Double ring: a solid inner ring plus a dashed outer one, so focus never relies on colour alone. */
+:focus-visible {
+  outline: 4px dashed var(--c3);
+  outline-offset: 4px;
+  box-shadow: 0 0 0 4px var(--c2);
+}
+
+::selection {
+  background: var(--c1);
+  color: var(--ink);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Type */
+
+.display {
+  font-family: var(--font-display);
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.ts-1 {
+  text-shadow: var(--ts-1);
+}
+.ts-2 {
+  text-shadow: var(--ts-2);
+}
+.ts-3 {
+  text-shadow: var(--ts-3);
+}
+.ts-mega {
+  text-shadow: var(--ts-mega);
+}
+
+.gradient-text {
+  background: var(--rainbow);
+  background-size: 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  text-shadow: none;
+  animation: gradient-shift 4s ease infinite;
+}
+
+/* Text-shadow and gradient fill don't mix; a drop-shadow filter gives gradient text depth. */
+.gradient-text.ts-3 {
+  filter: drop-shadow(3px 3px 0 var(--c5)) drop-shadow(3px 3px 0 rgb(13 13 26 / 0.9));
+}
+
+.label {
+  font-family: var(--font-head);
+  font-weight: 800;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--a);
+}
+
+.dim {
+  color: var(--fg-dim);
+}
+
+.faint {
+  color: var(--fg-faint);
+}
+
+.small {
+  font-size: 0.9rem;
+}
+
+/* Patterns, for cards and sections. Colour comes from --a. */
+
+.pat-dots {
+  background-image: radial-gradient(circle, color-mix(in srgb, var(--a) 45%, transparent) 1.5px, transparent 1.7px);
+  background-size: 22px 22px;
+}
+
+.pat-stripes {
+  background-image: repeating-linear-gradient(
+    -35deg,
+    transparent 0 14px,
+    color-mix(in srgb, var(--a) 10%, transparent) 14px 28px
+  );
+}
+
+.pat-checker {
+  background-image: conic-gradient(from 90deg at 1px 1px, transparent 90deg, color-mix(in srgb, var(--a) 14%, transparent) 0);
+  background-size: 36px 36px;
+}
+
+.pat-mesh {
+  background-image:
+    radial-gradient(ellipse at 20% 30%, color-mix(in srgb, var(--a) 22%, transparent) 0%, transparent 55%),
+    radial-gradient(ellipse at 85% 80%, color-mix(in srgb, var(--s2) 18%, transparent) 0%, transparent 55%);
+}
+
+/* Shadows */
+
+.shadow-hard {
+  box-shadow:
+    8px 8px 0 var(--s1),
+    16px 16px 0 var(--s2);
+}
+
+.glow {
+  box-shadow: var(--glow);
+}
+
+/* Motion */
+
+@keyframes float {
+  0%,
+  100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-20px) rotate(5deg);
+  }
+}
+
+@keyframes float-reverse {
+  0%,
+  100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  50% {
+    transform: translateY(20px) rotate(-5deg);
+  }
+}
+
+@keyframes pulse-glow {
+  0%,
+  100% {
+    box-shadow:
+      0 0 20px rgb(255 58 242 / 0.5),
+      6px 6px 0 var(--c3);
+  }
+  50% {
+    box-shadow:
+      0 0 40px rgb(255 58 242 / 0.8),
+      0 0 60px rgb(0 245 212 / 0.5),
+      8px 8px 0 var(--c3);
+  }
+}
+
+@keyframes gradient-shift {
+  0%,
+  100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+@keyframes spin-slow {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes wiggle {
+  0%,
+  100% {
+    transform: rotate(-3deg);
+  }
+  50% {
+    transform: rotate(3deg);
+  }
+}
+
+@keyframes bounce-subtle {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+@keyframes pop-in {
+  0% {
+    transform: scale(0.6) rotate(-6deg);
+    opacity: 0;
+  }
+  100% {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+.animate-float {
+  animation: float 6s ease-in-out infinite;
+}
+.animate-float-reverse {
+  animation: float-reverse 5s ease-in-out infinite;
+}
+.animate-pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+.animate-spin-slow {
+  animation: spin-slow 20s linear infinite;
+}
+.animate-wiggle {
+  animation: wiggle 1s ease-in-out infinite;
+}
+.animate-bounce {
+  animation: bounce-subtle 2s ease-in-out infinite;
+}
+.animate-pop {
+  animation: pop-in 450ms var(--ease-bounce) both;
+}
+
+/*
+ * Calm: the OS setting, or the grown-ups' "Calm mode" switch. Continuous
+ * motion stops and decorations go; colours, borders and shadows stay.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.15s !important;
+  }
+}
+
+:root[data-calm] *,
+:root[data-calm] *::before,
+:root[data-calm] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+}
+
+:root[data-calm] .deco,
+:root[data-calm] .bigword {
+  display: none;
+}

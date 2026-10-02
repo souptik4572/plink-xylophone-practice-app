@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useImperativeHandle, useRef, useState, type CSSProperties, type Ref } from 'react'
 import { playTone } from '../audio/synth'
 import { barFrequency, type Instrument } from '../instrument'
+import { sparkle } from '../ui/confetti'
 import { strikeBus, type BarStrike, type StrikeSource } from './barStrike'
 import { barForKeyEvent, DEFAULT_KEY_LABELS, layoutKeyLabels } from './keymap'
 import { usePointerStrikes } from './usePointerStrikes'
@@ -8,8 +9,13 @@ import { usePointerStrikes } from './usePointerStrikes'
 export interface XylophoneHandle {
   /** Brief strike animation on one bar. */
   flash(bar: number): void
-  /** Replay highlight: `lit` glows fully with its key cap, `cue` shows faintly. */
-  highlight(lit: number | null, cue: number | null, opts?: { muted?: boolean; misfit?: boolean }): void
+  /**
+   * `lit` glows fully with its key cap, `cue` shows faintly. With `target`,
+   * the lit bar is the one to hit, and a bouncing pointer sits above it.
+   */
+  highlight(lit: number | null, cue: number | null, opts?: { muted?: boolean; misfit?: boolean; target?: boolean }): void
+  /** Sparkles burst from a bar: a right note. */
+  sparkle(bar: number): void
 }
 
 interface Props {
@@ -79,22 +85,27 @@ export function Xylophone({ instrument, showKeyCaps = true, keyboard = true, onS
     ref,
     () => ({
       flash,
+      sparkle(bar) {
+        sparkle(barEls.current[bar], instrument.bars[bar]?.colour ?? '#fff')
+      },
       highlight(lit, cue, opts = {}) {
         barEls.current.forEach((el, i) => {
           if (!el) return
           el.classList.toggle('lit', i === lit)
           el.classList.toggle('lit-muted', i === lit && !!opts.muted)
           el.classList.toggle('lit-misfit', i === lit && !!opts.misfit)
+          el.classList.toggle('target', i === lit && !!opts.target)
           el.classList.toggle('cue', i === cue && i !== lit)
         })
       },
     }),
-    [flash],
+    [flash, instrument],
   )
 
   const n = instrument.bars.length
   return (
     <div className="xylo" ref={container} role="group" aria-label="Xylophone">
+      <span className="xylo-rail" aria-hidden />
       {instrument.bars.map((b, i) => (
         <button
           key={i}
@@ -110,6 +121,9 @@ export function Xylophone({ instrument, showKeyCaps = true, keyboard = true, onS
           <span className="nail" aria-hidden />
           <span className="bar-label" aria-hidden>
             {b.label}
+          </span>
+          <span className="pointer" aria-hidden>
+            ▼
           </span>
           {showKeyCaps && i < keyLabels.length && (
             <kbd className="keycap" aria-hidden>

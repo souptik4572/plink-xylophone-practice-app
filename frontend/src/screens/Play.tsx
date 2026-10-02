@@ -1,8 +1,7 @@
+import { ArrowRight, BrainCircuit, CircleAlert, Heart, Keyboard, ListOrdered, Mic, Piano, Play as PlayIcon, Repeat, Volume2, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import {
-  getHealth,
   getPraise,
-  listSongs,
   nextDrill,
   postAttempts,
   startSession,
@@ -10,18 +9,24 @@ import {
   type Drill,
   type ParentNote,
 } from '../api'
+import { useApp } from '../app/AppContext'
+import { lastSongId, rememberSong, useSongs } from '../app/useSongs'
 import { audioConfig } from '../audio/audioConfig'
 import { listenForBars } from '../audio/mic'
 import { getAudioContext, playTone } from '../audio/synth'
-import { barFrequency, isCalibrated, type Instrument } from '../instrument'
+import { barFrequency, isCalibrated } from '../instrument'
 import { createPhraseRun, type PhraseRun } from '../play/phraseRun'
 import { strikeBus, type BarStrike } from '../player/barStrike'
+import { isTextEntry } from '../player/keymap'
 import { attemptToNotes } from '../player/playback'
 import { playOnce } from '../player/playOnce'
 import { Xylophone, type XylophoneHandle } from '../player/Xylophone'
 import { phraseBars, replayNotes, type ApiSong, type Phrase } from '../songs/songs'
+import { cn, tone } from '../theme/palette'
+import { confetti } from '../ui/confetti'
+import { BigWord, Deco } from '../ui/Deco'
+import { Button, Card, Chip, ScreenTitle, Switch } from '../ui/ui'
 import { DEFAULT_PRAISE, pick, say } from '../voice'
-import { isTextEntry } from '../player/keymap'
 
 const cfg = audioConfig.play
 
@@ -34,24 +39,30 @@ interface Turn {
   phrase: Phrase
 }
 
+/** True once the page has had a click or key press, so audio may start without another. */
+const canAutoplay = () => (navigator as Navigator & { userActivation?: { hasBeenActive: boolean } }).userActivation?.hasBeenActive ?? false
+
 /** Wait mode (spec 7.4): glow the target, wait for the right bar, never buzz. */
-export function Play({ instrument }: { instrument: Instrument }) {
+export function Play({ songId: initialSong, autostart }: { songId?: string; autostart?: boolean }) {
+  const { instrument, settings, navigate, serverUp } = useApp()
+  const { songs, offline } = useSongs()
   const xylo = useRef<XylophoneHandle>(null)
-  const stageEl = useRef<HTMLDivElement>(null)
-  const [songs, setSongs] = useState<ApiSong[] | null>(null)
-  const [loadError, setLoadError] = useState(false)
-  const [songId, setSongId] = useState('twinkle')
+  const [songId, setSongId] = useState(initialSong ?? lastSongId())
   const [source, setSource] = useState<Source>('onscreen')
   const [tester, setTester] = useState(false)
   const [stage, setStage] = useState<Stage>('setup')
   const [turn, setTurn] = useState<Turn | null>(null)
   const [progress, setProgress] = useState(0)
   const [lastTurn, setLastTurn] = useState<{ bar: number; t: number; correct: boolean }[]>([])
+  const [stars, setStars] = useState<boolean[]>([])
+  const [praiseLine, setPraiseLine] = useState('')
   const [stats, setStats] = useState({ phrases: 0, notes: 0, firstTry: 0 })
   const [error, setError] = useState('')
   const [drill, setDrill] = useState<Drill | null>(null)
   const [note, setNote] = useState<ParentNote | 'writing' | null>(null)
+  const [starting, setStarting] = useState(false)
   const praise = useRef(DEFAULT_PRAISE)
+  const celebrateEl = useRef<HTMLDivElement>(null)
   /** Rows not yet saved; the parent note waits for them. */
   const pendingSave = useRef<Promise<unknown>>(Promise.resolve())
 
@@ -64,20 +75,27 @@ export function Play({ instrument }: { instrument: Instrument }) {
   const stopMic = useRef<(() => void) | null>(null)
 
   const calibrated = isCalibrated(instrument)
-
-  useEffect(() => {
-    listSongs()
-      .then(setSongs)
-      .catch(() => setLoadError(true))
-  }, [])
+  const playable = songs?.filter((s) => s.phrases.length > 0) ?? []
+  const chosen = playable.find((s) => s.id === songId) ?? playable[0]
 
   useEffect(
     () => () => {
       clearTimeout(hintTimer.current)
       stopMic.current?.()
+      document.documentElement.removeAttribute('data-focus')
     },
     [],
   )
+
+  // Focus: while she is finding a bar, page decorations step back.
+  useEffect(() => {
+    document.documentElement.toggleAttribute('data-focus', stage === 'playing')
+    // On short screens the celebration may sit below the fold: bring it into view.
+    if (stage === 'phraseDone' || stage === 'sessionDone') {
+      const quiet = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      setTimeout(() => celebrateEl.current?.scrollIntoView({ block: 'nearest', behavior: quiet ? 'auto' : 'smooth' }), 350)
+    }
+  }, [stage])
 
   const bar = (i: number) => instrument.bars[i]
 
@@ -96,7 +114,7 @@ export function Play({ instrument }: { instrument: Instrument }) {
     const r = run.current
     const t = r?.target()
     if (!session.current || !r || t === null || t === undefined) return
-    xylo.current?.highlight(t, null)
+    xylo.current?.highlight(t, null, { target: true })
     playTone(barFrequency(instrument, t))
     r.present(performance.now())
     waiting.current = true
@@ -118,16 +136,24 @@ export function Play({ instrument }: { instrument: Instrument }) {
     setTurn({ song, phraseIdx, phrase })
     setProgress(0)
     setStage('playing')
-    presentNote()
   }
+
+  // Present the first note after the playing view (and its xylophone) has mounted.
+  const presentRef = useRef(presentNote)
+  useEffect(() => {
+    presentRef.current = presentNote
+  })
+  useEffect(() => {
+    if (turn) presentRef.current()
+  }, [turn])
 
   const goNext = async () => {
     const s = session.current
-    if (!s || !songs) return
+    if (!s || !chosen) return
     try {
-      const d = await nextDrill(s.id, songId)
+      const d = await nextDrill(s.id, chosen.id)
       setDrill(d)
-      const song = songs.find((x) => x.id === d.song_id) ?? songs.find((x) => x.id === songId)!
+      const song = playable.find((x) => x.id === d.song_id) ?? chosen
       beginPhrase(song, d.phrase_idx)
     } catch (e) {
       setError(`Could not reach the local server: ${e instanceof Error ? e.message : e}`)
@@ -135,11 +161,14 @@ export function Play({ instrument }: { instrument: Instrument }) {
   }
 
   const start = async () => {
+    if (!chosen || starting) return
     setError('')
+    setStarting(true)
     getAudioContext() // this click is the user gesture that unlocks audio
+    rememberSong(chosen.id)
     try {
-      const [s, health] = await Promise.all([startSession(tester ? 'tester' : 'child'), getHealth()])
-      session.current = { id: s.id, start: performance.now(), minutes: health.session_minutes }
+      const s = await startSession(tester ? 'tester' : 'child')
+      session.current = { id: s.id, start: performance.now(), minutes: settings.session_minutes }
       setStats({ phrases: 0, notes: 0, firstTry: 0 })
       setNote(null)
       // Gemma writes this session's praise in the background; the defaults cover the first phrase.
@@ -156,8 +185,21 @@ export function Play({ instrument }: { instrument: Instrument }) {
       await goNext()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setStarting(false)
     }
   }
+
+  const startRef = useRef(start)
+  useEffect(() => {
+    startRef.current = start
+  })
+  const autostarted = useRef(false)
+  useEffect(() => {
+    if (!autostart || autostarted.current || !chosen || offline || !canAutoplay()) return
+    autostarted.current = true
+    void startRef.current()
+  }, [autostart, chosen, offline])
 
   const requestNote = async (sessionId: number) => {
     setNote('writing')
@@ -171,7 +213,7 @@ export function Play({ instrument }: { instrument: Instrument }) {
 
   const finish = () => {
     const s = session.current
-    // Ended early: the note is still written and kept for the Parent screen.
+    // Ended early: the note is still written and kept for the grown-ups' screen.
     if (s && stats.phrases > 0 && note === null) void requestNote(s.id)
     clearTimeout(hintTimer.current)
     stopMic.current?.()
@@ -179,15 +221,7 @@ export function Play({ instrument }: { instrument: Instrument }) {
     xylo.current?.highlight(null, null)
     session.current = null
     setStage('setup')
-  }
-
-  const celebrate = (big: boolean) => {
-    stageEl.current?.animate(
-      big
-        ? [{ transform: 'scale(1)' }, { transform: 'scale(1.03)' }, { transform: 'scale(1)' }]
-        : [{ filter: 'brightness(1)' }, { filter: 'brightness(1.15)' }, { filter: 'brightness(1)' }],
-      { duration: big ? 600 : 250 },
-    )
+    navigate('/')
   }
 
   const completePhrase = (r: PhraseRun) => {
@@ -196,6 +230,7 @@ export function Play({ instrument }: { instrument: Instrument }) {
     setProgress(r.position())
     setLastTurn(r.strikes())
     const rows = r.rows()
+    setStars(rows.map((x) => x.first_try_correct))
     setStats((st) => ({
       phrases: st.phrases + 1,
       notes: st.notes + rows.length,
@@ -204,8 +239,10 @@ export function Play({ instrument }: { instrument: Instrument }) {
     pendingSave.current = postAttempts(rows).catch((e) =>
       setError(`Could not save this phrase: ${e instanceof Error ? e.message : e}`),
     )
-    celebrate(true)
-    say(pick(praise.current))
+    confetti()
+    const line = pick(praise.current)
+    setPraiseLine(line)
+    say(line)
     const s = session.current!
     const over = performance.now() - s.start >= s.minutes * 60000
     setStage(over ? 'sessionDone' : 'phraseDone')
@@ -225,12 +262,13 @@ export function Play({ instrument }: { instrument: Instrument }) {
     } else if (result === 'right') {
       waiting.current = false
       clearTimeout(hintTimer.current)
-      celebrate(false)
+      xylo.current?.sparkle(s.bar)
       xylo.current?.highlight(null, null)
       setProgress(r.position())
       window.setTimeout(presentNote, cfg.nextNoteDelayMs)
     } else if (result === 'complete') {
       waiting.current = false
+      xylo.current?.sparkle(s.bar)
       completePhrase(r)
     }
   }
@@ -250,7 +288,7 @@ export function Play({ instrument }: { instrument: Instrument }) {
     replaying.current = false
     const t = run.current?.target()
     if (t !== null && t !== undefined) {
-      xylo.current?.highlight(t, null)
+      xylo.current?.highlight(t, null, { target: true })
       armHint()
     }
   }
@@ -277,155 +315,277 @@ export function Play({ instrument }: { instrument: Instrument }) {
     return () => window.removeEventListener('keydown', onKey)
   }, [stage])
 
-  if (loadError) {
+  if (!serverUp || offline) {
     return (
       <section className="screen">
-        <h2>Play</h2>
-        <div className="panel">
-          <p>Play needs the local server, which keeps her practice log. Start it with <code>make dev</code>.</p>
-        </div>
+        <ScreenTitle kicker="Play" t={3}>
+          Plink needs its server
+        </ScreenTitle>
+        <Card t={3} border="dashed" pattern="stripes" className="stack">
+          <p className="dim">
+            Play keeps her practice log, so the local server has to be running. Start it with <code>make dev</code>. Free
+            play works without it.
+          </p>
+          <div className="row">
+            <Button variant="primary" icon={<Piano aria-hidden />} onClick={() => navigate('/free')}>
+              Free play
+            </Button>
+          </div>
+        </Card>
       </section>
     )
   }
 
   if (stage === 'setup') {
     return (
-      <section className="screen">
-        <div className="screen-head">
-          <h2>Play</h2>
-        </div>
-        <div className="panel setup">
-          <label className="song-pick">
-            Song
-            <select value={songId} onChange={(e) => setSongId(e.target.value)} disabled={!songs}>
-              {songs?.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.title}
-                  {s.misfits.length ? ' (almost fits)' : ''}
-                </option>
+      <section className="screen play-setup">
+        <Deco
+          items={[
+            { shape: 'star', at: { top: '2%', right: '4%' }, size: 52, t: 2, motion: 'spin-slow' },
+            { emoji: '🎶', at: { top: '30%', right: '1%' }, size: 44, t: 1, motion: 'bounce', wide: true },
+            { shape: 'circle', at: { top: '9%', right: '22%' }, size: 40, t: 0, motion: 'float', wide: true },
+            { shape: 'sparkle', at: { bottom: '6%', right: '6%' }, size: 36, t: 4, motion: 'float-reverse' },
+          ]}
+        />
+        <ScreenTitle kicker="Play" t={1} gradient>
+          Let’s play!
+        </ScreenTitle>
+
+        <div className="setup-step">
+          <h3 className="step-title ts-1">
+            <span className="step-num tone-0">1</span> Pick a song
+          </h3>
+          {!songs ? (
+            <p className="faint">Loading songs…</p>
+          ) : (
+            <div className="song-choices" role="group" aria-label="Song">
+              {playable.map((s, i) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  aria-pressed={chosen?.id === s.id}
+                  className={cn('song-choice card card-sm-shadow', tone(i), i % 2 === 1 && 'card-dashed', chosen?.id === s.id && 'chosen')}
+                  onClick={() => setSongId(s.id)}
+                >
+                  <span className="song-choice-title">{s.title}</span>
+                  <span className="mini-strip" aria-hidden>
+                    {s.bars.slice(0, 12).map((b, j) => (
+                      <i key={j} style={{ background: instrument.bars[b]?.colour }} />
+                    ))}
+                  </span>
+                  <span className="faint small">
+                    {s.phrases.length} parts{s.misfits.length > 0 ? ' · almost fits' : ''}
+                  </span>
+                </button>
               ))}
-            </select>
-          </label>
-          <fieldset className="choice">
-            <legend>She plays on</legend>
-            <label>
-              <input type="radio" checked={source === 'onscreen'} onChange={() => setSource('onscreen')} />
-              The on-screen xylophone (mouse, touch or keys)
-            </label>
-            <label className={calibrated ? '' : 'muted'}>
-              <input
-                type="radio"
-                checked={source === 'mic'}
-                disabled={!calibrated}
-                onChange={() => setSource('mic')}
-              />
-              Her xylophone, through the microphone <span className="badge">beta</span>
-              {!calibrated && ' (calibrate it on the Parent screen first)'}
-            </label>
-          </fieldset>
-          <label className="toggle muted">
-            <input type="checkbox" checked={tester} onChange={(e) => setTester(e.target.checked)} />
-            A grown-up is testing (not counted in her progress)
-          </label>
-          <button type="button" className="primary" onClick={start} disabled={!songs}>
-            Start
-          </button>
-          {error && <p className="warn">{error}</p>}
+            </div>
+          )}
         </div>
+
+        <div className="setup-step">
+          <h3 className="step-title ts-1">
+            <span className="step-num tone-1">2</span> She plays on
+          </h3>
+          <div className="source-choices" role="group" aria-label="She plays on">
+            <button
+              type="button"
+              aria-pressed={source === 'onscreen'}
+              className={cn('source-choice card card-sm-shadow tone-1', source === 'onscreen' && 'chosen')}
+              onClick={() => setSource('onscreen')}
+            >
+              <span className="icon-bubble" aria-hidden>
+                <Keyboard />
+              </span>
+              <span className="stack-tight">
+                <strong>The screen</strong>
+                <span className="faint small">Tap the bars, or keys A S D F J K L ;</span>
+              </span>
+            </button>
+            <button
+              type="button"
+              aria-pressed={source === 'mic'}
+              disabled={!calibrated}
+              className={cn('source-choice card card-sm-shadow card-dashed tone-3', source === 'mic' && 'chosen')}
+              onClick={() => setSource('mic')}
+            >
+              <span className="icon-bubble" aria-hidden>
+                <Mic />
+              </span>
+              <span className="stack-tight">
+                <strong>
+                  Her xylophone <Chip t={2}>Beta</Chip>
+                </strong>
+                <span className="faint small">
+                  {calibrated ? 'Plink listens through the microphone' : 'Teach Plink her xylophone first (Grown-ups → Calibrate)'}
+                </span>
+              </span>
+            </button>
+          </div>
+        </div>
+
+        <div className="setup-go">
+          <Button
+            variant="primary"
+            size="lg"
+            className="animate-pulse-glow"
+            icon={starting ? <span className="spinner" aria-hidden /> : <PlayIcon aria-hidden />}
+            onClick={start}
+            disabled={!chosen || starting}
+          >
+            {starting ? 'Getting ready…' : 'Start'}
+          </Button>
+          <Switch t={4} checked={tester} onChange={(e) => setTester(e.target.checked)} label="A grown-up is testing (not counted)" />
+          <p className="faint small">{settings.session_minutes} minute session · change it in Grown-ups → Settings</p>
+        </div>
+        {error && (
+          <p className="alert" role="alert">
+            <CircleAlert aria-hidden /> {error}
+          </p>
+        )}
       </section>
     )
   }
 
   const phraseLen = turn ? turn.phrase.end - turn.phrase.start + 1 : 0
+  const firstTryPct = stats.notes ? Math.round((100 * stats.firstTry) / stats.notes) : 0
 
   return (
-    <section className="screen play">
-      <div className="screen-head">
-        <h2>{turn?.song.title}</h2>
-        <button type="button" className="ghost" onClick={finish}>
+    <section className={cn('screen play-stage', stage !== 'playing' && 'celebrating')}>
+      <div className="stage-head">
+        <div className="stack-tight">
+          <p className="label tone-2">{turn?.song.title}</p>
+          <h2 className="ts-2 stage-title">{turn?.phrase.nickname}</h2>
+        </div>
+        <Button variant="ghost" t={3} icon={<X aria-hidden />} onClick={finish}>
           Finish
-        </button>
-      </div>
-
-      <div ref={stageEl}>
-        <Xylophone ref={xylo} instrument={instrument} keyboard={source === 'onscreen'} />
+        </Button>
       </div>
 
       {turn && (
-        <div className="progress" aria-label={`Note ${Math.min(progress + 1, phraseLen)} of ${phraseLen}`}>
+        <ol className="pips" aria-label={`Note ${Math.min(progress + 1, phraseLen)} of ${phraseLen}`}>
           {phraseBars(turn.song, turn.phrase).map((b, i) => (
-            <span
+            <li
               key={i}
-              className={`pip ${i < progress ? 'done' : ''} ${i === progress && stage === 'playing' ? 'now' : ''}`}
-              style={{ background: i < progress ? bar(b).colour : undefined, borderColor: bar(b).colour }}
+              className={cn('pip', i < progress && 'done', i === progress && stage === 'playing' && 'now')}
+              style={{ '--pip': bar(b).colour } as React.CSSProperties}
             />
           ))}
-        </div>
+        </ol>
       )}
 
+      <Xylophone ref={xylo} instrument={instrument} keyboard={source === 'onscreen'} showKeyCaps={settings.show_key_caps} />
+
       {stage === 'playing' && (
-        <div className="actions">
-          <button type="button" className="huge" onClick={hearAgain} aria-keyshortcuts="Space">
-            🔊 Hear it again
-          </button>
-          {turn?.phrase.tip && <p className="muted tip">{turn.phrase.tip}</p>}
-          {drill && (
-            <p className="muted tip picked-by">
-              {turn?.phrase.nickname} ·{' '}
-              {drill.source === 'tabpfn'
-                ? `chosen by TabPFN: about ${Math.round((drill.expected_success ?? 0) * 100)}% likely right first time`
-                : 'in song order: not enough practice yet for TabPFN to choose'}
+        <div className="stage-actions">
+          <Button variant="outline" t={1} size="lg" icon={<Volume2 aria-hidden />} onClick={hearAgain} aria-keyshortcuts="Space">
+            Hear it again
+          </Button>
+          {turn?.phrase.tip && (
+            <p className="bubble tone-4 tip">
+              <Heart aria-hidden size={18} /> {turn.phrase.tip}
             </p>
+          )}
+          {drill && (
+            <Chip t={drill.source === 'tabpfn' ? 4 : 1} dashed icon={drill.source === 'tabpfn' ? <BrainCircuit aria-hidden /> : <ListOrdered aria-hidden />}>
+              {drill.source === 'tabpfn'
+                ? `TabPFN pick · ${Math.round((drill.expected_success ?? 0) * 100)}% first-try chance`
+                : 'In song order · TabPFN takes over after more practice'}
+            </Chip>
           )}
         </div>
       )}
 
-      {stage === 'phraseDone' && (
-        <div className="actions">
-          <p className="say yay">🎉 Yay!</p>
-          <button type="button" onClick={playBackMyTurn}>
-            ▶ Play back my turn
-          </button>
-          <button type="button" className="huge" onClick={goNext}>
-            Next →
-          </button>
-        </div>
-      )}
-
-      {stage === 'sessionDone' && (
-        <div className="actions">
-          <p className="say yay">⭐ All done for today!</p>
-          <p className="muted">
-            {stats.phrases} phrases · {stats.notes ? Math.round((100 * stats.firstTry) / stats.notes) : 0}% of notes
-            right first time
+      {(stage === 'phraseDone' || stage === 'sessionDone') && (
+        <div className="celebrate" role="status" ref={celebrateEl}>
+          <BigWord word={stage === 'sessionDone' ? 'DONE' : 'YAY'} t={0} at={{ left: '50%', top: '50%', transform: 'translate(-50%, -50%)' }} />
+          <p className="yay display gradient-text animate-pop">{stage === 'sessionDone' ? 'All done!' : 'Yay!'}</p>
+          <p className="praise ts-2">{praiseLine}</p>
+          <p className="stars" aria-label={`${stars.filter(Boolean).length} of ${stars.length} notes right first time`}>
+            {stars.map((s, i) => (
+              <span key={i} className={cn('star', s && 'on')} style={{ animationDelay: `${i * 90}ms` }} aria-hidden>
+                ★
+              </span>
+            ))}
           </p>
-          <button type="button" onClick={playBackMyTurn}>
-            ▶ Play back my turn
-          </button>
-          <button type="button" onClick={goNext}>
-            One more
-          </button>
-          <button type="button" className="huge" onClick={finish}>
-            Finish
-          </button>
-          <aside className="note" aria-live="polite">
-            <h3>For the grown-up</h3>
-            {note === 'writing' && <p className="muted">Gemma is writing today's note…</p>}
-            {note && note !== 'writing' && (
-              <>
-                <p>{note.note}</p>
-                <p className="muted small">
-                  {note.source === 'gemma' ? `Written by Gemma in ${note.seconds}s` : 'Gemma was unavailable; a plain summary'}
-                  {note.weakest_jumps.length > 0 &&
-                    ` · trickiest jumps: ${note.weakest_jumps.map((w) => `${w.from}→${w.to}`).join(', ')}`}
+
+          {stage === 'sessionDone' && (
+            <div className="stats session-stats">
+              <Card t={0} className="stat">
+                <p className="label">Parts</p>
+                <p className="stat-value">{stats.phrases}</p>
+              </Card>
+              <Card t={1} className="stat" border="dashed">
+                <p className="label">Notes</p>
+                <p className="stat-value">{stats.notes}</p>
+              </Card>
+              <Card t={2} className="stat">
+                <p className="label">First try</p>
+                <p className="stat-value">
+                  {firstTryPct}
+                  <span className="stat-unit">%</span>
                 </p>
+              </Card>
+            </div>
+          )}
+
+          <div className="row celebrate-actions">
+            <Button variant="secondary" t={1} icon={<Repeat aria-hidden />} onClick={playBackMyTurn}>
+              Play back my turn
+            </Button>
+            {stage === 'phraseDone' ? (
+              <Button variant="primary" size="lg" icon={<ArrowRight aria-hidden />} onClick={goNext}>
+                Next
+              </Button>
+            ) : (
+              <>
+                <Button variant="outline" t={2} onClick={goNext}>
+                  One more
+                </Button>
+                <Button variant="primary" size="lg" onClick={finish}>
+                  Finish
+                </Button>
               </>
             )}
-          </aside>
+          </div>
+
+          {stage === 'sessionDone' && (
+            <Card t={4} as="aside" className="grownup-note" pattern="dots" tilt="r" aria-live="polite">
+              <div className="card-head">
+                <span className="label">
+                  <Heart aria-hidden size={16} /> For the grown-up
+                </span>
+                {note && note !== 'writing' && <span className="faint small">{note.source === 'gemma' ? `Gemma · ${note.seconds}s` : 'Summary'}</span>}
+              </div>
+              {note === 'writing' && (
+                <p className="row faint">
+                  <span className="spinner" aria-hidden /> Gemma is writing today’s note…
+                </p>
+              )}
+              {note && note !== 'writing' && (
+                <>
+                  <p className="note-text">{note.note}</p>
+                  {note.weakest_jumps.length > 0 && (
+                    <p className="row small">
+                      <span className="faint">Trickiest jumps:</span>
+                      {note.weakest_jumps.map((w, i) => (
+                        <Chip key={i} t={i + 1}>
+                          {w.from} → {w.to}
+                        </Chip>
+                      ))}
+                    </p>
+                  )}
+                </>
+              )}
+            </Card>
+          )}
         </div>
       )}
 
-      {error && <p className="warn">{error}</p>}
+      {error && (
+        <p className="alert" role="alert">
+          <CircleAlert aria-hidden /> {error}
+        </p>
+      )}
     </section>
   )
 }

@@ -15,12 +15,22 @@ export interface Health {
   ollama: boolean
   gemma_model: string
   tabpfn: boolean
-  session_minutes: number
-  drill_target: number
+}
+
+export interface Settings {
   child_name: string
   home_language: string
   speech_lang: string
+  session_minutes: number
+  drill_target: number
+  calm_mode: boolean
+  show_key_caps: boolean
 }
+
+export const getSettings = () => call<Settings>('/api/settings')
+
+export const saveSettings = (s: Partial<Settings>) =>
+  call<Settings>('/api/settings', { method: 'PUT', body: JSON.stringify(s) })
 
 export const getHealth = () => call<Health>('/api/health')
 
@@ -103,6 +113,17 @@ export interface SessionSummary {
 }
 
 export const listSessions = () => call<SessionSummary[]>('/api/sessions')
+
+export interface Progress {
+  sessions: number
+  notes: number
+  first_try_pct: number
+  practice_days: number
+  streak_days: number
+  weakest_jumps: WeakJump[]
+}
+
+export const getProgress = () => call<Progress>('/api/progress')
 
 export const getPraise = () => post<{ lines: string[]; source: string }>('/api/praise', {})
 

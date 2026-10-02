@@ -11,7 +11,7 @@ make test
 make eval    # TabPFN drill-picker benchmark
 ```
 
-Requires `uv`, `pnpm`, and [Ollama](https://ollama.com). Open the app at `http://localhost:5173` on the same machine: the microphone needs a secure context, which `localhost` is and a LAN IP is not.
+Requires `uv`, `pnpm`, and [Ollama](https://ollama.com). Her name, the family's language and speaking voice, session length, and how much of a challenge the drill picker aims for are set in the app under **Grown-ups → Settings**; `.env` only supplies the first defaults. Open the app at `http://localhost:5173` on the same machine: the microphone needs a secure context, which `localhost` is and a LAN IP is not.
 
 ### TabPFN licence (one time)
 
@@ -23,4 +23,6 @@ TabPFN-3 weights are open-weight under a **non-commercial** licence and need a o
 - [Gemma 4](https://ollama.com/library/gemma4) via Ollama: Apache 2.0.
 - [Basic Pitch](https://github.com/spotify/basic-pitch-ts) by Spotify: Apache 2.0. Model served locally from the npm package.
 - [TabPFN](https://github.com/PriorLabs/TabPFN) by Prior Labs: TabPFN-3 weights under a non-commercial licence.
+- Fonts, self-hosted from npm so the app works offline: [Outfit](https://fonts.google.com/specimen/Outfit), [DM Sans](https://fonts.google.com/specimen/DM+Sans) and [Bungee](https://fonts.google.com/specimen/Bungee), all SIL Open Font License, via [Fontsource](https://fontsource.org).
+- Icons: [Lucide](https://lucide.dev) (ISC).
 - The built-in xylophone is inspired by my earlier project [souptik4572/xylophone](https://github.com/souptik4572/xylophone). It was rebuilt from scratch here; no code or sound files were copied.
