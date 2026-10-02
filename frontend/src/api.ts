@@ -25,6 +25,8 @@ export interface Settings {
   drill_target: number
   calm_mode: boolean
   show_key_caps: boolean
+  help_level: 'lots' | 'some' | 'little'
+  parent_gate: boolean
 }
 
 export const getSettings = () => call<Settings>('/api/settings')
@@ -72,6 +74,17 @@ export interface NewSong {
 
 export const createSong = (song: NewSong) => post<ApiSong>('/api/songs', song)
 
+export interface Fit {
+  bars: number[]
+  beats: number[]
+  misfits: number[]
+  fit_score: number
+  transposition: number
+}
+
+/** Place note names (any key) on her bars: the transposing fitter, spec 7.6. */
+export const fitNotes = (notes: string) => post<Fit>('/api/songs/fit', { notes })
+
 export const buildLesson = (songId: string, lyric = '') =>
   post<ApiSong & { lesson_source: 'gemma' | 'fallback'; seconds: number }>(
     `/api/songs/${encodeURIComponent(songId)}/lesson`,
@@ -117,6 +130,7 @@ export const listSessions = () => call<SessionSummary[]>('/api/sessions')
 export interface Progress {
   sessions: number
   notes: number
+  stars: number
   first_try_pct: number
   practice_days: number
   streak_days: number

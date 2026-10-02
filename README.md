@@ -11,6 +11,22 @@ make test
 make eval    # TabPFN drill-picker benchmark
 ```
 
+## How she practises
+
+1. **Plink's turn:** Plink plays the part while the bars light up, a little slower than normal.
+2. **Her turn:** the next bar glows and Plink waits. There is no buzzer; a miss just makes the right bar wiggle.
+3. **Help levels**, picked before each session (and in Grown-ups → Settings):
+   - 🌱 *Lots of help*: only the glowing bar plays, and Plink says each colour. Errorless.
+   - 🌿 *Some help*: glow and spoken hints when she's stuck.
+   - 🌳 *Little help*: she plays from memory, and the glow appears only if she needs it.
+4. Every note right first time is a **star**; every 15 stars unlock a **sticker** in her book on Home.
+
+The Grown-ups area asks for a sum before opening, so little hands can't reach settings or "delete all data".
+
+## Adding songs
+
+Play it in on the bars, type note letters, or **sing or hum it**. Singing runs [Basic Pitch](https://github.com/spotify/basic-pitch-ts) in the browser from the model files this app serves, so the recording never leaves the tab.
+
 Requires `uv`, `pnpm`, and [Ollama](https://ollama.com). Her name, the family's language and speaking voice, session length, and how much of a challenge the drill picker aims for are set in the app under **Grown-ups → Settings**; `.env` only supplies the first defaults. Open the app at `http://localhost:5173` on the same machine: the microphone needs a secure context, which `localhost` is and a LAN IP is not.
 
 ### TabPFN licence (one time)

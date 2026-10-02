@@ -8,6 +8,7 @@ import './theme/base.css'
 import './theme/components.css'
 import './theme/xylophone.css'
 import './theme/screens.css'
+import './theme/kids.css'
 import App from './App'
 
 createRoot(document.getElementById('root')!).render(

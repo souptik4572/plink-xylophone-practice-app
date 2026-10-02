@@ -73,6 +73,8 @@ class SettingsIn(BaseModel):
     drill_target: float | None = Field(default=None, ge=0.5, le=0.95)
     calm_mode: bool | None = None
     show_key_caps: bool | None = None
+    help_level: Literal["lots", "some", "little"] | None = None
+    parent_gate: bool | None = None
 
 
 def settings_out(s: Settings) -> dict[str, Any]:
@@ -297,6 +299,8 @@ def progress(db: SessionDep) -> dict[str, Any]:
         "sessions": len(sessions),
         "notes": n,
         "first_try_pct": round(100 * sum(r.first_try_correct for r in rows) / n) if n else 0,
+        # One star per note right first time: her sticker book fills from these.
+        "stars": sum(r.first_try_correct for r in rows),
         "practice_days": len(days),
         "streak_days": streak,
         "weakest_jumps": drill.weakest_jumps(child_history(db), bar_labels(db)) if n else [],
@@ -342,6 +346,7 @@ class AttemptIn(BaseModel):
     response_ms: int = Field(ge=0)
     wrong_before_correct: int = Field(ge=0)
     first_try_correct: bool
+    help_level: Literal["lots", "some", "little"] = "some"
 
 
 class AttemptsIn(BaseModel):

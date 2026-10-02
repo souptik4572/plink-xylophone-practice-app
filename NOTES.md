@@ -93,3 +93,47 @@ The user asked for the whole frontend restyled to `DESIGN_PROMPT.xml` (Maximalis
   - "1 days".
 - **Latent bug fixed:** the first note of a session was presented before the xylophone mounted, so its glow could be missed. It is now presented after mount.
 - Tests: 132 pytest, 59 vitest.
+
+## Milestone 6 — sing it, and a learning loop built for children (Fri 2 Oct)
+
+The user asked for milestone 6 framed as "making the learning experience more suitable for the children". Built hum-to-notes (spec 7.7 route 2) and reworked the practice loop around how young children learn melodies.
+
+**The learning loop**
+- **Call and response.** Before each part, Plink plays it while the bars light (Plink's turn), then hands over (her turn). Spec 7.4 had "Hear it again" but no demonstration; hearing a tune before playing it is how children learn songs. The demo is slower at higher help levels (0.75× / 0.85× / 1×).
+- **Help levels (fading prompts)**, chosen per session on the Play setup page and in Settings:
+  - *Lots*: errorless. On screen, only the target bar sounds, and its colour is spoken. With the mic, a wrong strike is simply not scored.
+  - *Some*: the spec's wait mode.
+  - *Little*: from memory. No glow, no target tone, and the pips go white; the glow appears after 3.5 s or after a miss.
+- **New TabPFN feature, a spec deviation:** `help_level` is logged on every attempt row and is a TabPFN feature, so the model learns the same jump is easier with more help, and the drill picker asks "how likely at the level she'll play next". An additive migration at startup adds the column to existing databases; the user's 24 existing rows became `some`.
+- **Plink the mascot:** an SVG creature with a mallet for a head. Its moods (hello, listen, turn, happy, hint, cheer) show whose turn it is, and a speech bubble mirrors what it says aloud ("Listen…", "Your turn!", "Yellow!", "The red one!", the praise line), for a child who reads a little.
+- **Gentle misses:** no buzzer. The target bar wiggles, and Plink glances at it with a hint face.
+- **Stars and stickers:** a star for every note right first time (`/api/progress` `stars`, derived from the log, nothing new stored), a sticker every 15 (16 stickers, then the book starts again). The star jar is on Home; a new sticker is revealed and spoken at the end of a session (never for grown-up test sessions). The user's real data: 17 stars, so the kitten is already earned.
+- **Grown-ups gate:** a two-digit sum with four big answers before the Grown-ups area. It stays open for the browser tab and can be turned off in Settings.
+
+**Sing it (Basic Pitch)**
+- Record up to 20 s with a 3-2-1 countdown, a level meter and a timer. Plink is in "listening" mode.
+- **Spec correction:** spec section 5 says Basic Pitch "resamples to 22,050 Hz mono itself". It does not: it throws unless the input is already 22,050 Hz mono, so Plink resamples with an `OfflineAudioContext`.
+- TensorFlow.js and Basic Pitch load only when someone sings (a 1.0 MB lazy chunk); the main bundle is 336 kB. The model is served from `public/basic-pitch/`.
+- Then: clean, then transposing fitter, then beats snapped to half beats (the last note keeps its sung length), then the editable strip (now also with "add a note") and replay.
+- **Cleaning, in two spec deviations backed by measurement:**
+  1. Basic Pitch runs each note up to the next onset, so a sung "C C" arrives *touching* (gap ~10 ms). The spec's "merge immediate repeats" (and my first 50 ms-gap rule) turned Twinkle's 14 notes into 8 — 6 fixes, failing the gate.
+  2. A held note with vibrato comes back as many same-pitch fragments: a low voice gave 7 pieces for one F♯ F♯ pair, and 26 notes for a 14-note tune.
+
+  The fix uses the take's loudness envelope. Same-pitch neighbours are joined only if the voice did *not* dip between them (a real repeat is re-attacked). Notes more than 14 semitones from the median pitch, or under half the typical loudness, are dropped (a rumble at MIDI 35 in the low take). The 120 ms minimum is applied after joining, so fragments aren't lost.
+- **Gate (spec: a hummed Twinkle fitted with at most 3 fixes).** Synthetic voice-like hums of Twinkle lines 1–2 went through the real UI: Chrome's fake microphone fed a WAV through `getUserMedia`, then capture, resampling, Basic Pitch, cleaning, fit and strip. Fixes are the edit distance to the true bars.
+
+  | Take | Before the fix | After |
+  | --- | --- | --- |
+  | Clean hum in D, 100 bpm, ±12 cents | 6 | **0** (fitter moved it 2 steps down) |
+  | Low voice in A, 80 bpm, heavy vibrato, legato, ±25 cents | 26 notes of junk | **0** |
+  | Child-like voice in G, 120 bpm, ±30 cents, breathy | ~4 | **1** (one detuned note, flagged as a misfit) |
+
+  Transcribe plus fit takes 1.3 s on this Mac. These are synthetic voices; a real hummed take from the family is still to do.
+- Harness gotchas worth remembering: Chrome's fake-audio-from-file is silent unless `--disable-features=AudioServiceSandbox` is set; and zsh doesn't word-split `$var`, which silently fed Chrome a nonexistent file name in looped runs.
+
+**Bugs found by driving it in headless Chrome**
+- The stage kept the setup page's scroll position, so Plink and the title slid under the sticky nav. Each part now starts scrolled to the top.
+- The user's saved calibration predates colour names, so hints said "E!" and "Try the E one". Instruments using the standard colours now get their names back (`withColourNames`).
+- Icon-and-sentence lines wrapped the sentence under the icon; added a `.with-icon` utility.
+
+Tests: 138 pytest, 85 vitest. **Not committed:** the user asked to review the changes first.

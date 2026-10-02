@@ -228,3 +228,10 @@
     padding-top: 56px;
   }
 }
+
+/* Errorless mode: the other bars are asleep. */
+.bar.inert {
+  opacity: 0.3 !important;
+  filter: grayscale(0.6) !important;
+  cursor: default;
+}

@@ -84,7 +84,7 @@ export function FreePlay({ songId: initialSong }: { songId?: string }) {
             </div>
           )}
           {song.misfits.length > 0 && (
-            <p className="row small dim">
+            <p className="with-icon small dim">
               <Info aria-hidden size={18} /> Almost fits: {song.misfits.length} note{song.misfits.length > 1 ? 's' : ''} need a bar she
               doesn’t have, so they play on the nearest one (marked ≈).
             </p>

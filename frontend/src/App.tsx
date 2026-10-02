@@ -3,9 +3,10 @@ import { useEffect, useState } from 'react'
 import { getHealth, getSettings, loadInstrument, type Health, type Settings } from './api'
 import { AppContext, DEFAULT_SETTINGS } from './app/AppContext'
 import { useRoute } from './app/route'
-import { DEFAULT_INSTRUMENT, type Instrument } from './instrument'
+import { DEFAULT_INSTRUMENT, withColourNames, type Instrument } from './instrument'
 import { FreePlay } from './screens/FreePlay'
 import { Home } from './screens/Home'
+import { ParentGate } from './kids/ParentGate'
 import { GrownUps } from './screens/Parent'
 import { Play } from './screens/Play'
 import { Songs } from './screens/Songs'
@@ -36,7 +37,7 @@ export default function App() {
         setServerUp(true)
       })
       .catch(() => setServerUp(false))
-    void loadInstrument().then((saved) => setInstrument(saved ?? DEFAULT_INSTRUMENT))
+    void loadInstrument().then((saved) => setInstrument(saved ? withColourNames(saved) : DEFAULT_INSTRUMENT))
     getSettings()
       .then(setSettings)
       .catch(() => {})
@@ -98,7 +99,11 @@ export default function App() {
           {route.screen === 'play' && <Play key={`${route.arg}-${route.go}`} songId={route.arg} autostart={route.go} />}
           {route.screen === 'free' && <FreePlay songId={route.arg} />}
           {route.screen === 'songs' && <Songs adding={route.arg === 'new'} />}
-          {route.screen === 'grownups' && <GrownUps tab={route.arg} />}
+          {route.screen === 'grownups' && (
+            <ParentGate>
+              <GrownUps tab={route.arg} />
+            </ParentGate>
+          )}
         </main>
 
         <footer className="status" aria-label="Status">

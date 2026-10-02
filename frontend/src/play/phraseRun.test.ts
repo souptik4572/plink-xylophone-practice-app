@@ -47,6 +47,7 @@ describe('phrase run (wait mode)', () => {
       response_ms: 700,
       wrong_before_correct: 0,
       first_try_correct: true,
+      help_level: 'some',
     })
     expect(rows.map((r) => r.prev_bar)).toEqual([null, 3, 3, 2])
     expect(rows.map((r) => r.note_idx)).toEqual([7, 8, 9, 10])
@@ -101,5 +102,33 @@ describe('phrase run (wait mode)', () => {
     expect(run.strike(0, 'keyboard', 100)).toBe('complete')
     expect(run.strike(0, 'keyboard', 200)).toBe('ignored')
     expect(run.rows()).toHaveLength(1)
+  })
+})
+
+describe('help levels', () => {
+  it('records the help level on every row', () => {
+    const run = createPhraseRun({ ...base, bars: [3, 2], helpLevel: 'little' })
+    run.present(0)
+    run.strike(3, 'keyboard', 100)
+    run.present(200)
+    run.strike(2, 'keyboard', 300)
+    expect(run.rows().map((r) => r.help_level)).toEqual(['little', 'little'])
+  })
+
+  it('with lots of help, wrong strikes are not scored: errorless learning', () => {
+    const run = createPhraseRun({ ...base, bars: [3], helpLevel: 'lots' })
+    run.present(0)
+    expect(run.strike(5, 'pointer', 100)).toBe('ignored')
+    expect(run.wrongSinceGlow()).toBe(0)
+    expect(run.strike(3, 'pointer', 400)).toBe('complete')
+    expect(run.rows()[0]).toMatchObject({ first_try_correct: true, wrong_before_correct: 0, response_ms: 400 })
+    expect(run.strikes()).toEqual([{ bar: 3, t: 400, correct: true }])
+  })
+
+  it('defaults to some help', () => {
+    const run = createPhraseRun({ ...base, bars: [3] })
+    run.present(0)
+    run.strike(3, 'keyboard', 10)
+    expect(run.rows()[0].help_level).toBe('some')
   })
 })

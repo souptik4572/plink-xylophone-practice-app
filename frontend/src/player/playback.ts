@@ -28,6 +28,16 @@ export function songToNotes(items: { bar: number; beats: number; misfit?: boolea
   })
 }
 
+/** The same notes played slower (tempo < 1), for Plink's demonstration. */
+export function slowNotes(notes: ReplayNote[], tempo: number): ReplayNote[] {
+  if (tempo === 1) return notes
+  return notes.map((n) => ({
+    ...n,
+    t_ms: n.t_ms / tempo,
+    ...(n.dur_ms !== undefined && { dur_ms: n.dur_ms / tempo }),
+  }))
+}
+
 /** Her attempt, in her own timing from the first strike. */
 export function attemptToNotes(strikes: { bar: number; t: number; correct: boolean }[]): ReplayNote[] {
   const t0 = strikes[0]?.t ?? 0

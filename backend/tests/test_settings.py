@@ -23,6 +23,8 @@ def test_settings_round_trip(client):
         "drill_target": 0.7,
         "calm_mode": True,
         "show_key_caps": False,
+        "help_level": "little",
+        "parent_gate": False,
     }
     assert client.put("/api/settings", json=body).json() == body
     assert client.get("/api/settings").json() == body

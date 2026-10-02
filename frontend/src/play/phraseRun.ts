@@ -1,5 +1,11 @@
 import type { StrikeSource } from '../player/barStrike'
 
+/**
+ * How much the game helps (fading prompts): lots = errorless, only the target
+ * counts; some = glow and hints; little = from memory, glow only when stuck.
+ */
+export type HelpLevel = 'lots' | 'some' | 'little'
+
 /** One row per expected note, as POST /api/attempts takes it (spec 7.8). */
 export interface AttemptRow {
   session_id: number
@@ -16,6 +22,7 @@ export interface AttemptRow {
   response_ms: number
   wrong_before_correct: number
   first_try_correct: boolean
+  help_level: HelpLevel
 }
 
 export interface PhraseSpec {
@@ -27,6 +34,7 @@ export interface PhraseSpec {
   bars: number[]
   /** performance.now() when the session started. */
   sessionStart: number
+  helpLevel?: HelpLevel
 }
 
 export type StrikeResult = 'right' | 'wrong' | 'complete' | 'ignored'
@@ -37,6 +45,7 @@ export type StrikeResult = 'right' | 'wrong' | 'complete' | 'ignored'
  * passes in times, so it is testable without a browser.
  */
 export function createPhraseRun(spec: PhraseSpec) {
+  const helpLevel = spec.helpLevel ?? 'some'
   let pos = 0
   let glowAt = 0
   let firstStrikeAt: number | null = null
@@ -70,10 +79,12 @@ export function createPhraseRun(spec: PhraseSpec) {
 
     strike(bar: number, source: AttemptRow['input_source'], now: number): StrikeResult {
       if (pos >= spec.bars.length) return 'ignored'
+      const correct = bar === spec.bars[pos]
+      // Errorless learning: with lots of help only the target counts, so a miss leaves no trace.
+      if (!correct && helpLevel === 'lots') return 'ignored'
       struckYet = true
       firstStrikeAt ??= now
       firstSource ??= source
-      const correct = bar === spec.bars[pos]
       strikes.push({ bar, t: now, correct })
       if (!correct) {
         wrong++
@@ -94,6 +105,7 @@ export function createPhraseRun(spec: PhraseSpec) {
         response_ms: Math.max(0, Math.round(firstStrikeAt - glowAt)),
         wrong_before_correct: wrong,
         first_try_correct: wrong === 0,
+        help_level: helpLevel,
       })
       pos++
       return pos >= spec.bars.length ? 'complete' : 'right'

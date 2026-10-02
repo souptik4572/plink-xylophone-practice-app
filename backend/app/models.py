@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import JSON, Column
+from sqlalchemy import JSON, Column, inspect, text
 from sqlmodel import Field, Session, SQLModel, create_engine
 
 from app import config
@@ -64,6 +64,8 @@ class Attempt(SQLModel, table=True):
     response_ms: int
     wrong_before_correct: int
     first_try_correct: bool
+    # How much help the game gave: lots (only the target sounds), some (glow + hints), little (glow only if stuck).
+    help_level: str = "some"
     created_at: datetime = Field(default_factory=_now)
 
 
@@ -78,6 +80,9 @@ class Settings(SQLModel, table=True):
     drill_target: float = config.DRILL_TARGET
     calm_mode: bool = False
     show_key_caps: bool = True
+    help_level: str = "some"
+    # Ask a grown-up sum before opening the grown-ups' screens.
+    parent_gate: bool = True
 
 
 def get_settings(db: Session) -> Settings:
@@ -102,8 +107,22 @@ def song_phrases(song: Song) -> list[dict[str, Any]]:
 engine = create_engine(f"sqlite:///{config.DB_PATH}", connect_args={"check_same_thread": False})
 
 
+# Columns added after the first release. create_all makes new tables but never
+# alters old ones, so an existing plink.db gains these here, with safe defaults.
+ADDED_COLUMNS = {
+    "attempt": [("help_level", "VARCHAR NOT NULL DEFAULT 'some'")],
+    "settings": [("help_level", "VARCHAR NOT NULL DEFAULT 'some'"), ("parent_gate", "BOOLEAN NOT NULL DEFAULT 1")],
+}
+
+
 def init_db(eng=engine) -> None:
     SQLModel.metadata.create_all(eng)
+    with eng.begin() as con:
+        for table, columns in ADDED_COLUMNS.items():
+            have = {c["name"] for c in inspect(con).get_columns(table)}
+            for name, ddl in columns:
+                if name not in have:
+                    con.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
 
 
 def get_session():

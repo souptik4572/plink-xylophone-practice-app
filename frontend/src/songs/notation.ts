@@ -28,6 +28,12 @@ export function noteToMidi(name: string): number {
   return 12 * (Number(m[3]) + 1) + STEPS[m[1]] + accidental
 }
 
+const NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+
+export function midiToName(midi: number): string {
+  return `${NAMES[midi % 12]}${Math.floor(midi / 12) - 1}`
+}
+
 export function parseNotes(text: string): SongNote[] {
   return text
     .split(/\s+/)

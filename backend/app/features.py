@@ -15,6 +15,7 @@ FEATURES = [
     "times_seen_phrase",
     "replays_before",
     "mins_into_session",
+    "help_level",
 ]
 LABEL = "first_try_correct"
 
@@ -33,7 +34,9 @@ def frame(rows: list[dict]) -> pd.DataFrame:
     return df
 
 
-def candidate_rows(bars: list[int], times_seen: int, input_source: str, mins_into_session: float) -> pd.DataFrame:
+def candidate_rows(
+    bars: list[int], times_seen: int, input_source: str, mins_into_session: float, help_level: str = "some"
+) -> pd.DataFrame:
     """A phrase's rows as if she played it next, for predict_proba."""
     rows = []
     for pos, target in enumerate(bars):
@@ -49,6 +52,7 @@ def candidate_rows(bars: list[int], times_seen: int, input_source: str, mins_int
                 "times_seen_phrase": times_seen,
                 "replays_before": 0,
                 "mins_into_session": mins_into_session,
+                "help_level": help_level,
             }
         )
     return frame(rows)

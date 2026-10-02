@@ -16,6 +16,10 @@ export interface XylophoneHandle {
   highlight(lit: number | null, cue: number | null, opts?: { muted?: boolean; misfit?: boolean; target?: boolean }): void
   /** Sparkles burst from a bar: a right note. */
   sparkle(bar: number): void
+  /** A little "here I am" wiggle on a bar, after a miss. */
+  nudge(bar: number): void
+  /** Errorless mode: only this bar sounds when struck; null lets every bar sound. */
+  only(bar: number | null): void
 }
 
 interface Props {
@@ -40,6 +44,7 @@ export function Xylophone({ instrument, showKeyCaps = true, keyboard = true, onS
   const container = useRef<HTMLDivElement>(null)
   const barEls = useRef<(HTMLButtonElement | null)[]>([])
   const [keyLabels, setKeyLabels] = useState(DEFAULT_KEY_LABELS)
+  const onlyBar = useRef<number | null>(null)
   const onStrikeRef = useRef(onStrike)
   useEffect(() => {
     onStrikeRef.current = onStrike
@@ -58,6 +63,7 @@ export function Xylophone({ instrument, showKeyCaps = true, keyboard = true, onS
 
   const strike = useCallback(
     (bar: number, source: StrikeSource) => {
+      if (onlyBar.current !== null && bar !== onlyBar.current) return
       playTone(barFrequency(instrument, bar))
       flash(bar)
       const s: BarStrike = { bar, source, t: performance.now() }
@@ -87,6 +93,24 @@ export function Xylophone({ instrument, showKeyCaps = true, keyboard = true, onS
       flash,
       sparkle(bar) {
         sparkle(barEls.current[bar], instrument.bars[bar]?.colour ?? '#fff')
+      },
+      nudge(bar) {
+        barEls.current[bar]?.animate(
+          reducedMotion()
+            ? [{ filter: 'brightness(1.5)' }, { filter: 'none' }]
+            : [
+                { rotate: '0deg' },
+                { rotate: '-4deg' },
+                { rotate: '4deg' },
+                { rotate: '-2deg' },
+                { rotate: '0deg' },
+              ],
+          { duration: 420, easing: 'ease-in-out' },
+        )
+      },
+      only(bar) {
+        onlyBar.current = bar
+        barEls.current.forEach((el, i) => el?.classList.toggle('inert', bar !== null && i !== bar))
       },
       highlight(lit, cue, opts = {}) {
         barEls.current.forEach((el, i) => {

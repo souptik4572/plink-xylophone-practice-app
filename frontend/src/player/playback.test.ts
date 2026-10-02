@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { audioConfig } from '../audio/audioConfig'
-import { attemptToNotes, PlaybackEngine, songToNotes, type ReplayNote } from './playback'
+import { attemptToNotes, PlaybackEngine, slowNotes, songToNotes, type ReplayNote } from './playback'
 
 const { lookaheadS, startLeadS, litFraction, loopGapMs } = audioConfig.playback
 
@@ -187,5 +187,19 @@ describe('PlaybackEngine', () => {
     run(e, 1)
     expect(sounded).toHaveLength(0)
     expect(e.status).toBe('ended')
+  })
+})
+
+describe('slowNotes', () => {
+  it('stretches times and lengths for a slower demonstration', () => {
+    expect(slowNotes([{ bar: 1, t_ms: 0, dur_ms: 400 }, { bar: 2, t_ms: 400, dur_ms: 400 }], 0.8)).toEqual([
+      { bar: 1, t_ms: 0, dur_ms: 500 },
+      { bar: 2, t_ms: 500, dur_ms: 500 },
+    ])
+  })
+
+  it('leaves notes alone at full speed', () => {
+    const n = [{ bar: 1, t_ms: 0 }]
+    expect(slowNotes(n, 1)).toEqual(n)
   })
 })

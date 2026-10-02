@@ -568,3 +568,16 @@
   border-top: 6px double var(--a);
   margin: 0;
 }
+
+/* An icon beside a sentence: the text wraps beside the icon, not under it. */
+.with-icon {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.with-icon > svg,
+.with-icon > .spinner {
+  flex: none;
+  margin-top: 3px;
+}

@@ -98,13 +98,14 @@ def weakest_jumps(history: pd.DataFrame, labels: list[str], k: int = 3, model=ta
         return [named(r.prev_bar, r.target_bar, r.rate, "observed") for r in seen.itertuples()]
 
     typical = {
+        "times_seen": int(history["times_seen_phrase"].median()),
         "input_source": history["input_source"].mode()[0],
-        "times_seen_phrase": int(history["times_seen_phrase"].median()),
         "mins_into_session": float(history["mins_into_session"].median()),
+        "help_level": history["help_level"].mode()[0],
     }
     probe = pd.concat(
         [
-            candidate_rows([int(p), int(t)], typical["times_seen_phrase"], typical["input_source"], typical["mins_into_session"]).iloc[[1]]
+            candidate_rows([int(p), int(t)], **typical).iloc[[1]]
             for p, t in zip(pairs["prev_bar"], pairs["target_bar"])
         ],
         ignore_index=True,
@@ -139,9 +140,11 @@ def _compute(db: Session, session_id: int, song_id: str | None, last: Attempt | 
             .group_by(Attempt.song_id, Attempt.phrase_idx)
         ).all()
     }
+    prefs = get_settings(db)
     ctx = {
         "input_source": last.input_source if last else "pointer",
         "mins_into_session": last.mins_into_session if last else 0.0,
+        "help_level": prefs.help_level,
     }
     cands = []
     for song in songs:
@@ -152,8 +155,7 @@ def _compute(db: Session, session_id: int, song_id: str | None, last: Attempt | 
 
     child = db.exec(select(Attempt).where(Attempt.player == "child")).all()
     history = frame([r.model_dump(include={*FEATURES, LABEL}) for r in child])
-    target = get_settings(db).drill_target
-    result = pick(history, cands, (last.song_id, last.phrase_idx) if last else None, target=target)
+    result = pick(history, cands, (last.song_id, last.phrase_idx) if last else None, target=prefs.drill_target)
     if result.source == "tabpfn":
         log.info("TabPFN picked %s #%d (p=%.2f) in %.2fs on %d rows", result.song_id, result.phrase_idx, result.expected_success, result.seconds, len(history))
     return result

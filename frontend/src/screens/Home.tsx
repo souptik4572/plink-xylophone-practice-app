@@ -4,6 +4,8 @@ import { getProgress, listSessions, type Progress, type SessionSummary } from '.
 import { useApp } from '../app/AppContext'
 import { lastSongId, useSongs } from '../app/useSongs'
 import { isCalibrated } from '../instrument'
+import { Mascot } from '../kids/Mascot'
+import { stickerProgress } from '../kids/stickers'
 import { cn, tone } from '../theme/palette'
 import { BigWord, Deco, type DecoItem } from '../ui/Deco'
 import { Button, Card, Chip } from '../ui/ui'
@@ -16,7 +18,6 @@ const HERO_DECO: DecoItem[] = [
   { shape: 'squiggle', at: { bottom: '16%', right: '30%' }, size: 80, t: 3, motion: 'wiggle', wide: true },
   { shape: 'square', at: { top: '50%', right: '3%' }, size: 34, t: 4, motion: 'float', delay: 1.2, wide: true },
   { shape: 'note', at: { top: '30%', right: '14%' }, size: 52, t: 1, motion: 'bounce', wide: true },
-  { emoji: '🎵', at: { bottom: '34%', right: '6%' }, size: 40, t: 0, motion: 'wiggle', wide: true },
   { emoji: '⭐', at: { bottom: '6%', right: '8%' }, size: 44, t: 2, motion: 'bounce' },
 ]
 
@@ -45,6 +46,7 @@ export function Home() {
     { done: isCalibrated(instrument), label: 'Teach Plink her xylophone', hint: 'Optional: lets her play the real one', href: '#/grownups/calibrate' },
   ]
   const setupDone = steps.slice(0, 3).every((s) => s.done)
+  const jar = stickerProgress(progress?.stars ?? 0)
 
   return (
     <div className="home">
@@ -83,7 +85,44 @@ export function Home() {
             </p>
           )}
         </div>
+        <Mascot mood="hello" say="Let’s play!" size={150} className="hero-mascot" />
       </section>
+
+      {progress && (
+        <section className="section" aria-labelledby="jar-title">
+          <h2 id="jar-title" className="ts-2">
+            {name ? `${name}’s` : 'Her'} <span className="gradient-text">star jar</span>
+          </h2>
+          <Card t={2} pattern="mesh" className="jar" tilt="l">
+            <p className="jar-count" aria-label={`${progress.stars} stars`}>
+              <span className="star-big" aria-hidden>
+                ★
+              </span>
+              {progress.stars}
+            </p>
+            <div className="next-sticker">
+              <p className="dim">
+                {jar.toNext} more {jar.toNext === 1 ? 'star' : 'stars'} for the next sticker: one for every note right first time.
+              </p>
+              <span className="next-track" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(jar.fraction * 100)} aria-label="Next sticker">
+                <span className="next-fill" style={{ width: `${Math.max(4, jar.fraction * 100)}%` }} />
+              </span>
+            </div>
+            <ul className="sticker-book" aria-label="Sticker book">
+              {jar.earned.map((s, i) => (
+                <li key={s.emoji} className={cn('sticker', tone(i))} style={{ '--r': `${(i % 3) * 4 - 4}deg` } as React.CSSProperties} title={s.name}>
+                  <span role="img" aria-label={s.name}>
+                    {s.emoji}
+                  </span>
+                </li>
+              ))}
+              <li className="sticker locked tone-2" aria-label="Next sticker, still a surprise">
+                ?
+              </li>
+            </ul>
+          </Card>
+        </section>
+      )}
 
       {songs && songs.length > 0 && (
         <section className="section" aria-labelledby="pick-title">

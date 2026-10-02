@@ -289,8 +289,16 @@ function SettingsTab() {
             <span>Mostly wins</span>
           </span>
         </Field>
+        <Field t={2} label="Help while playing" hint="She can also pick this before each session. Move down a step as she gets confident.">
+          <select className="select" value={draft.help_level} onChange={(e) => set('help_level', e.target.value as Settings['help_level'])}>
+            <option value="lots">🌱 Lots of help: only the glowing bar plays</option>
+            <option value="some">🌿 Some help: glow and hints</option>
+            <option value="little">🌳 Little help: from memory, glow if stuck</option>
+          </select>
+        </Field>
         <Switch t={1} checked={draft.calm_mode} onChange={(e) => set('calm_mode', e.target.checked)} label="Calm mode: no floating shapes or confetti" />
         <Switch t={0} checked={draft.show_key_caps} onChange={(e) => set('show_key_caps', e.target.checked)} label="Show keyboard letters on the bars" />
+        <Switch t={4} checked={draft.parent_gate} onChange={(e) => set('parent_gate', e.target.checked)} label="Ask a grown-up sum before opening this area" />
       </Card>
 
       <div className="settings-save row">

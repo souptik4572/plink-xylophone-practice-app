@@ -34,6 +34,15 @@ export const DEFAULT_INSTRUMENT: Instrument = {
   ],
 }
 
+/**
+ * Spoken hints need a colour word ("the red one"). Instruments saved before
+ * bars had names get them back from the standard colours they use.
+ */
+export function withColourNames(inst: Instrument): Instrument {
+  const known = new Map(DEFAULT_INSTRUMENT.bars.map((b) => [b.colour.toLowerCase(), b.colour_name]))
+  return { ...inst, bars: inst.bars.map((b) => ({ ...b, colour_name: b.colour_name ?? known.get(b.colour.toLowerCase()) })) }
+}
+
 export function barFrequency(instrument: Instrument, bar: number): number {
   return audioConfig.synth.baseFreqHz * 2 ** (instrument.bars[bar].semitone_offset / 12)
 }

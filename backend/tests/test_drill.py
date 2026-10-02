@@ -41,6 +41,7 @@ def history(n, both_classes=True):
                 "times_seen_phrase": i // 20,
                 "replays_before": 0,
                 "mins_into_session": (i % 40) / 10,
+                "help_level": "some",
                 "first_try_correct": bool(i % 3) if both_classes else True,
             }
         )

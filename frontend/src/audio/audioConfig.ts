@@ -76,6 +76,20 @@ export const audioConfig = {
     hintAfterSilenceMs: 8000,
     /** Pause after a right strike before the next target sounds, so the two don't clash. */
     nextNoteDelayMs: 450,
+    /** Pause between Plink's demonstration and her turn. */
+    afterDemoMs: 500,
+    /** How long a happy or hint face stays before the mascot goes back to waiting. */
+    moodMs: 1200,
+    /**
+     * Help levels (fading prompts). Lots: errorless, only the target sounds, its
+     * colour is spoken. Some: the spec's wait mode. Little: from memory, the glow
+     * appears only after a pause or a miss.
+     */
+    help: {
+      lots: { demoTempo: 0.75, glowAtStart: true, targetTone: true, sayColour: true, onlyTarget: true, promptAfterMs: 0 },
+      some: { demoTempo: 0.85, glowAtStart: true, targetTone: true, sayColour: false, onlyTarget: false, promptAfterMs: 0 },
+      little: { demoTempo: 1, glowAtStart: false, targetTone: false, sayColour: false, onlyTarget: false, promptAfterMs: 3500 },
+    },
   },
 
   /** Add a song, play it in (spec 7.7). */
@@ -83,5 +97,32 @@ export const audioConfig = {
     /** Strikes closer than this are one bounce of the mallet, not two notes. */
     minGapMs: 80,
     maxBeats: 4,
+  },
+
+  /** Sing or hum it (spec 7.7, route 2): Basic Pitch, then cleaning. */
+  hum: {
+    maxSeconds: 20,
+    /** Basic Pitch only accepts 22,050 Hz mono; Plink resamples before calling it. */
+    modelSampleRate: 22050,
+    modelUrl: '/basic-pitch/model.json',
+    /** Basic Pitch's own defaults (onset 0.5, frame 0.3, ~128 ms minimum). */
+    onsetThresh: 0.5,
+    frameThresh: 0.3,
+    minNoteFrames: 11,
+    /** Drop notes shorter than this (spec: 120 ms). */
+    minNoteS: 0.12,
+    /** Loudness envelope frame, for telling a held note from a sung repeat. */
+    envelopeFrameS: 0.01,
+    /**
+     * Two same-pitch notes are one held note unless the voice dips below this
+     * share of its level around the boundary (a repeat is re-attacked).
+     */
+    dipRatio: 0.55,
+    dipBeforeS: 0.08,
+    dipAfterS: 0.04,
+    /** A hummed tune stays within about an octave; notes further from its median pitch are noise. */
+    maxFromMedianSemitones: 14,
+    /** Notes quieter than this share of the typical note are ghosts (overtones, room). */
+    minRelativeAmp: 0.5,
   },
 } as const

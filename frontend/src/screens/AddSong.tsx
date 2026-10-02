@@ -1,6 +1,6 @@
-import { ArrowLeft, Circle, Keyboard, Mic, Play, Plus, Sparkles, Square, Trash2, Type } from 'lucide-react'
+import { ArrowLeft, Circle, CopyPlus, Keyboard, Mic, MicVocal, Play, Plus, Sparkles, Square, Trash2, Type } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { buildLesson, createSong } from '../api'
+import { buildLesson, createSong, fitNotes } from '../api'
 import { useApp } from '../app/AppContext'
 import { audioConfig } from '../audio/audioConfig'
 import { listenForBars } from '../audio/mic'
@@ -10,13 +10,16 @@ import { strikeBus, type BarStrike } from '../player/barStrike'
 import { songToNotes } from '../player/playback'
 import { ReplayControls } from '../player/ReplayControls'
 import { Xylophone, type XylophoneHandle } from '../player/Xylophone'
+import { Mascot } from '../kids/Mascot'
+import { cleanNotes, envelope, notesToText, recordVoice, transcribe } from '../songs/hum'
 import { lettersToTune, snapToBeats } from '../songs/recordTune'
 import type { ApiSong } from '../songs/songs'
 import { cn, tone } from '../theme/palette'
 import { confetti } from '../ui/confetti'
 import { Button, Card, Field, ScreenTitle, Switch } from '../ui/ui'
 
-type Route = 'play' | 'type'
+type Route = 'play' | 'sing' | 'type'
+type SingState = 'idle' | 'countdown' | 'singing' | 'thinking'
 type Stage = 'compose' | 'recording' | 'saving' | 'saved'
 
 /** Add a song (spec 7.7): play it in or type it, check it by ear, fix by tapping, then Gemma builds the lesson. */
@@ -48,6 +51,7 @@ export function AddSong() {
       setBars(recorded.current.map((r) => r.bar))
     } else if (selected !== null && stage === 'compose' && s.source !== 'mic') {
       setBars((b) => b.map((x, i) => (i === selected ? s.bar : x)))
+      setMisfits((m) => m.filter((x) => x !== selected))
       setSelected(selected + 1 < bars.length ? selected + 1 : null)
     }
   }
@@ -92,9 +96,87 @@ export function AddSong() {
     setBeats(tune.beats)
   }
 
+  const [sing, setSing] = useState<SingState>('idle')
+  const [count, setCount] = useState(3)
+  const [levels, setLevels] = useState<number[]>(() => Array(10).fill(0.05))
+  const [elapsed, setElapsed] = useState(0)
+  const [heard, setHeard] = useState('')
+  const [misfits, setMisfits] = useState<number[]>([])
+  const voice = useRef<Awaited<ReturnType<typeof recordVoice>> | null>(null)
+  const singTimer = useRef(0)
+
+  useEffect(() => () => clearInterval(singTimer.current), [])
+
+  const startSinging = async () => {
+    getAudioContext()
+    setError('')
+    setHeard('')
+    setMisfits([])
+    setSelected(null)
+    // A 3-2-1 so she can take a breath and start together with Plink.
+    setSing('countdown')
+    for (const n of [3, 2, 1]) {
+      setCount(n)
+      await new Promise((r) => setTimeout(r, 700))
+    }
+    try {
+      voice.current = await recordVoice(
+        (level) => setLevels((ls) => [...ls.slice(1), Math.max(0.05, level)]),
+        () => void stopSinging(),
+      )
+    } catch (e) {
+      setSing('idle')
+      setError(`The microphone is needed for singing: ${e instanceof Error ? e.message : e}`)
+      return
+    }
+    const t0 = performance.now()
+    setElapsed(0)
+    singTimer.current = window.setInterval(() => setElapsed((performance.now() - t0) / 1000), 200)
+    setSing('singing')
+  }
+
+  const stopSinging = async () => {
+    const v = voice.current
+    if (!v) return
+    voice.current = null
+    clearInterval(singTimer.current)
+    const take = v.stop()
+    setSing('thinking')
+    setHeard('Plink is listening back… 0%')
+    try {
+      const raw = await transcribe(take.samples, take.sampleRate, (p) => setHeard(`Plink is listening back… ${Math.round(p * 100)}%`))
+      const notes = cleanNotes(raw, envelope(take.samples, take.sampleRate))
+      if (notes.length === 0) {
+        setHeard('')
+        setError('Plink didn’t hear any notes. Try again a little louder, closer to the laptop.')
+        setSing('idle')
+        return
+      }
+      const fit = await fitNotes(notesToText(notes))
+      setBars(fit.bars)
+      setBeats(fit.beats)
+      setMisfits(fit.misfits)
+      const moved = fit.transposition === 0 ? '' : ` Moved ${Math.abs(fit.transposition)} steps ${fit.transposition > 0 ? 'up' : 'down'} to fit her bars.`
+      const odd = fit.misfits.length ? ` ${fit.misfits.length} need a bar she doesn’t have (dashed): check those.` : ''
+      setHeard(`Plink heard ${fit.bars.length} notes.${moved}${odd}`)
+    } catch (e) {
+      setHeard('')
+      setError(`Plink couldn’t work out the tune: ${e instanceof Error ? e.message : e}`)
+    }
+    setSing('idle')
+  }
+
+  const duplicate = (i: number) => {
+    setBars((b) => [...b.slice(0, i + 1), b[i], ...b.slice(i + 1)])
+    setBeats((b) => [...b.slice(0, i + 1), b[i], ...b.slice(i + 1)])
+    setMisfits((m) => m.filter((x) => x <= i).concat(m.filter((x) => x > i).map((x) => x + 1)))
+    setSelected(i + 1)
+  }
+
   const remove = (i: number) => {
     setBars((b) => b.filter((_, j) => j !== i))
     setBeats((b) => b.filter((_, j) => j !== i))
+    setMisfits((m) => m.filter((x) => x !== i).map((x) => (x > i ? x - 1 : x)))
     setSelected(null)
   }
 
@@ -103,7 +185,7 @@ export function AddSong() {
     setError('')
     setStage('saving')
     try {
-      const song = await createSong({ title: title.trim(), source: route === 'play' ? 'played' : 'typed', bars, beats })
+      const song = await createSong({ title: title.trim(), source: route === 'play' ? 'played' : route === 'sing' ? 'hummed' : 'typed', bars, beats })
       const lesson = await buildLesson(song.id)
       setSaved(lesson)
       bumpData()
@@ -131,7 +213,7 @@ export function AddSong() {
           {saved.title}
         </ScreenTitle>
         <Card t={4} pattern="dots" className="stack">
-          <p className="row dim">
+          <p className="with-icon dim">
             <Sparkles aria-hidden size={20} />
             {saved.lesson_source === 'gemma'
               ? `Gemma split it into ${saved.phrases.length} parts in ${saved.seconds}s.`
@@ -210,6 +292,17 @@ export function AddSong() {
             variant="secondary"
             t={3}
             role="tab"
+            aria-selected={route === 'sing'}
+            icon={<MicVocal aria-hidden />}
+            onClick={() => setRoute('sing')}
+            disabled={stage === 'recording' || sing !== 'idle'}
+          >
+            Sing it
+          </Button>
+          <Button
+            variant="secondary"
+            t={4}
+            role="tab"
             aria-selected={route === 'type'}
             icon={<Type aria-hidden />}
             onClick={() => setRoute('type')}
@@ -235,6 +328,50 @@ export function AddSong() {
               />
             )}
           </>
+        )}
+
+        {route === 'sing' && (
+          <div className="sing">
+            <Mascot
+              mood={sing === 'singing' ? 'listen' : sing === 'thinking' ? 'hint' : 'hello'}
+              say={sing === 'countdown' ? String(count) : sing === 'singing' ? 'La la la!' : sing === 'thinking' ? 'Hmm…' : 'Sing to me!'}
+              size={110}
+            />
+            <div className="stack">
+              <p className="dim">
+                Sing or hum the tune, slowly and clearly, up to {audioConfig.hum.maxSeconds} seconds. Plink works out the notes
+                right here on this laptop and fits them to her bars.
+              </p>
+              <div className="row">
+                {sing === 'singing' ? (
+                  <>
+                    <Button variant="primary" size="lg" className="recording" icon={<Square aria-hidden />} onClick={() => void stopSinging()}>
+                      Done
+                    </Button>
+                    <span className="sing-meter" aria-hidden>
+                      {levels.map((l, i) => (
+                        <i key={i} style={{ height: `${Math.round(l * 100)}%` }} />
+                      ))}
+                    </span>
+                    <span className="sing-time" aria-label={`${Math.floor(elapsed)} seconds`}>
+                      {Math.floor(elapsed)}s
+                    </span>
+                  </>
+                ) : (
+                  <Button
+                    variant="primary"
+                    size="lg"
+                    icon={sing === 'thinking' ? <span className="spinner" aria-hidden /> : <MicVocal aria-hidden />}
+                    onClick={() => void startSinging()}
+                    disabled={sing !== 'idle'}
+                  >
+                    {sing === 'countdown' ? `${count}…` : sing === 'thinking' ? 'Listening back…' : bars.length ? 'Sing again' : 'Start singing'}
+                  </Button>
+                )}
+              </div>
+              {heard && <p className="bubble tone-1">{heard}</p>}
+            </div>
+          </div>
         )}
 
         {route === 'type' && (
@@ -281,13 +418,18 @@ export function AddSong() {
               <span key={i} role="listitem" className={cn('strip-note', selected === i && 'sel')}>
                 <button
                   type="button"
-                  className="strip-chip"
+                  className={cn('strip-chip', misfits.includes(i) && 'misfit')}
                   style={{ background: instrument.bars[b].colour, width: `${30 + 16 * beats[i]}px` }}
                   onClick={() => setSelected(selected === i ? null : i)}
                   aria-label={`Note ${i + 1}: ${instrument.bars[b].label}, ${beats[i]} beats${selected === i ? ', selected' : ''}`}
                 >
                   {instrument.bars[b].label}
                 </button>
+                {selected === i && (
+                  <button type="button" className="strip-add" onClick={() => duplicate(i)} aria-label={`Add a note after note ${i + 1}`}>
+                    <CopyPlus aria-hidden size={14} />
+                  </button>
+                )}
                 {selected === i && (
                   <button type="button" className="strip-x" onClick={() => remove(i)} aria-label={`Delete note ${i + 1}`}>
                     <Trash2 aria-hidden size={14} />

@@ -10,6 +10,8 @@ export const DEFAULT_SETTINGS: Settings = {
   drill_target: 0.8,
   calm_mode: false,
   show_key_caps: true,
+  help_level: 'some',
+  parent_gate: true,
 }
 
 export interface AppState {
