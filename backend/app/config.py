@@ -24,3 +24,7 @@ PHRASE_MAX_NOTES = 6
 FALLBACK_PHRASE_NOTES = 4
 
 DB_PATH = Path(os.getenv("PLINK_DB", str(ROOT / "backend" / "plink.db")))
+BUILTIN_SONGS = ROOT / "frontend" / "src" / "songs" / "builtin.json"
+
+# The spec's default instrument: 8 bars, C major, C to high C.
+DEFAULT_OFFSETS = [0, 2, 4, 5, 7, 9, 11, 12]

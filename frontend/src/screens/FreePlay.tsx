@@ -1,26 +1,33 @@
-import { useMemo, useRef, useState } from 'react'
-import { audioConfig } from '../audio/audioConfig'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { listSongs } from '../api'
 import type { Instrument } from '../instrument'
-import { songToNotes } from '../player/playback'
 import { ReplayControls } from '../player/ReplayControls'
 import { Xylophone, type XylophoneHandle } from '../player/Xylophone'
-import builtin from '../songs/builtin.json'
-import { parseNotes, toDefaultBars, type SongDef } from '../songs/notation'
+import { offlineSongs, replayNotes, type ApiSong } from '../songs/songs'
 
-/** The built-in tunes that fit this instrument without the fitter. */
-function playableSongs(instrument: Instrument) {
-  return (builtin as SongDef[]).flatMap((s) => {
-    const bars = toDefaultBars(parseNotes(s.notes), instrument)
-    return bars ? [{ ...s, replay: songToNotes(bars, audioConfig.playback.bpm) }] : []
-  })
-}
-
+/** Her instrument to play freely, plus the song library: any tune or phrase replays with bars lighting. */
 export function FreePlay({ instrument }: { instrument: Instrument }) {
   const xylo = useRef<XylophoneHandle>(null)
   const [showKeys, setShowKeys] = useState(true)
-  const songs = useMemo(() => playableSongs(instrument), [instrument])
-  const [songId, setSongId] = useState(songs.find((s) => s.id === 'twinkle')?.id ?? songs[0]?.id)
-  const song = songs.find((s) => s.id === songId)
+  const [songs, setSongs] = useState<ApiSong[]>(() => offlineSongs(instrument))
+  const [songId, setSongId] = useState('twinkle')
+  const [phraseIdx, setPhraseIdx] = useState(-1)
+
+  useEffect(() => {
+    listSongs()
+      .then(setSongs)
+      .catch(() => {}) // server down: the offline built-ins still play
+  }, [])
+
+  const song = songs.find((s) => s.id === songId) ?? songs[0]
+  const phrase = phraseIdx >= 0 ? song?.phrases[phraseIdx] : undefined
+  const notes = useMemo(() => (song ? replayNotes(song, phrase) : []), [song, phrase])
+
+  // Hand the home-row keys back to the xylophone after picking from a list.
+  const pick = (fn: () => void) => (e: React.ChangeEvent<HTMLSelectElement>) => {
+    fn()
+    e.target.blur()
+  }
 
   return (
     <section className="screen">
@@ -35,23 +42,46 @@ export function FreePlay({ instrument }: { instrument: Instrument }) {
       <Xylophone ref={xylo} instrument={instrument} showKeyCaps={showKeys} />
 
       <div className="panel">
-        <label className="song-pick">
-          Listen to
-          <select
-            value={songId}
-            onChange={(e) => {
-              setSongId(e.target.value)
-              e.target.blur() // hand the home-row keys back to the xylophone
-            }}
-          >
-            {songs.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.title}
-              </option>
-            ))}
-          </select>
-        </label>
-        {song && <ReplayControls notes={song.replay} instrument={instrument} xylo={xylo} />}
+        <div className="row">
+          <label className="song-pick">
+            Listen to
+            <select
+              value={song?.id}
+              onChange={(e) =>
+                pick(() => {
+                  setSongId(e.target.value)
+                  setPhraseIdx(-1)
+                })(e)
+              }
+            >
+              {songs.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.title}
+                </option>
+              ))}
+            </select>
+          </label>
+          {song && song.phrases.length > 0 && (
+            <label className="song-pick">
+              Part
+              <select value={phraseIdx} onChange={(e) => pick(() => setPhraseIdx(Number(e.target.value)))(e)}>
+                <option value={-1}>Whole song</option>
+                {song.phrases.map((p, i) => (
+                  <option key={i} value={i}>
+                    {p.nickname}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+        </div>
+        {song && song.misfits.length > 0 && (
+          <p className="muted">
+            Almost fits: {song.misfits.length} note{song.misfits.length > 1 ? 's' : ''} need a bar she doesn't have,
+            so they play on the nearest one (marked ≈).
+          </p>
+        )}
+        {song && <ReplayControls notes={notes} instrument={instrument} xylo={xylo} />}
       </div>
     </section>
   )

@@ -1,17 +1,27 @@
 import { useEffect, useState } from 'react'
-import { DEFAULT_INSTRUMENT } from './instrument'
+import { getHealth, loadInstrument, type Health } from './api'
+import { DEFAULT_INSTRUMENT, type Instrument } from './instrument'
 import { FreePlay } from './screens/FreePlay'
+import { Parent } from './screens/Parent'
+import { Play } from './screens/Play'
 
-type Health = { ok: boolean; ollama: boolean; gemma_model: string; tabpfn: boolean }
+const SCREENS = [
+  { id: 'play', label: 'Play' },
+  { id: 'free', label: 'Free play' },
+  { id: 'parent', label: 'Parent' },
+] as const
+type ScreenId = (typeof SCREENS)[number]['id']
 
 export default function App() {
   const [health, setHealth] = useState<Health | null>(null)
+  const [instrument, setInstrument] = useState<Instrument>(DEFAULT_INSTRUMENT)
+  const [screen, setScreen] = useState<ScreenId>('play')
 
   useEffect(() => {
-    fetch('/api/health')
-      .then((r) => r.json())
+    getHealth()
       .then(setHealth)
       .catch(() => setHealth(null))
+    void loadInstrument().then((saved) => saved && setInstrument(saved))
   }, [])
 
   return (
@@ -21,14 +31,24 @@ export default function App() {
           Plink<span aria-hidden>·</span>
         </h1>
         <nav aria-label="Screens">
-          <button type="button" className="on" aria-current="page">
-            Free play
-          </button>
+          {SCREENS.map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              className={screen === s.id ? 'on' : ''}
+              aria-current={screen === s.id ? 'page' : undefined}
+              onClick={() => setScreen(s.id)}
+            >
+              {s.label}
+            </button>
+          ))}
         </nav>
       </header>
 
       <main>
-        <FreePlay instrument={DEFAULT_INSTRUMENT} />
+        {screen === 'play' && <Play instrument={instrument} />}
+        {screen === 'free' && <FreePlay instrument={instrument} />}
+        {screen === 'parent' && <Parent instrument={instrument} onInstrument={setInstrument} />}
       </main>
 
       <footer className="status">

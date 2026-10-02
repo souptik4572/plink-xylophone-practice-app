@@ -35,9 +35,9 @@ export function audioNow(): number {
   return ctx ? ctx.currentTime : 0
 }
 
-/** True while any tone the app made is still ringing. */
-export function isAppSounding(): boolean {
-  return ctx !== null && ctx.currentTime < soundingUntil
+/** True while any tone the app made is still ringing, or rang within `tailS`. */
+export function isAppSounding(tailS = 0): boolean {
+  return ctx !== null && ctx.currentTime < soundingUntil + tailS
 }
 
 /** Strike a bar at `when` (audio-clock seconds, default now). Returns a cancel function. */
