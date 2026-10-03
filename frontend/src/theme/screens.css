@@ -1255,3 +1255,183 @@
   outline: 3px dashed var(--c3);
   outline-offset: 3px;
 }
+
+/* Account menu (top bar) and the grown-up's account page */
+
+.topbar .nav {
+  margin-left: auto;
+}
+
+.account-menu {
+  position: relative;
+  flex: none;
+}
+
+.avatar {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--c1), var(--c5));
+  color: var(--fg);
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+  line-height: 1;
+  text-shadow: 2px 2px 0 var(--ink);
+}
+
+.avatar-lg {
+  width: 88px;
+  height: 88px;
+  font-size: 2.6rem;
+  border: 4px solid var(--c3);
+  box-shadow:
+    6px 6px 0 var(--c2),
+    12px 12px 0 var(--c1);
+}
+
+.account-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 48px;
+  padding: 2px 12px 2px 2px;
+  border: 3px dashed color-mix(in srgb, var(--c3) 70%, transparent);
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--fg);
+  transition:
+    transform var(--t-fast) var(--ease-bounce),
+    background-color var(--t-fast) ease-out,
+    box-shadow var(--t-fast) ease-out;
+}
+
+.account-button svg {
+  stroke-width: 2.75;
+  color: var(--c3);
+}
+
+.account-button:hover,
+.account-button[aria-expanded='true'] {
+  transform: scale(1.06) rotate(1deg);
+  border-style: solid;
+  background: rgb(255 230 0 / 0.14);
+}
+
+.account-button.on {
+  border: 3px solid var(--c3);
+  box-shadow:
+    4px 4px 0 var(--c1),
+    8px 8px 0 var(--c2);
+}
+
+.account-pop {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 14px);
+  z-index: var(--z-overlay);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: max-content;
+  min-width: 240px;
+  max-width: min(320px, calc(100vw - 32px));
+  padding: 12px;
+  border: 4px solid var(--c5);
+  border-radius: var(--r-box);
+  background: var(--bg);
+  box-shadow:
+    6px 6px 0 var(--c1),
+    12px 12px 0 var(--c2);
+}
+
+.account-who {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 10px 12px;
+  margin-bottom: 4px;
+  border-bottom: 3px dashed var(--c3);
+  overflow-wrap: anywhere;
+}
+
+.account-pop a {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 0 12px;
+  border-radius: 12px;
+  color: var(--fg);
+  text-decoration: none;
+  font-family: var(--font-head);
+  font-weight: 800;
+  font-size: 0.9rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.account-pop a:hover,
+.account-pop a:focus-visible {
+  background: color-mix(in srgb, var(--c2) 18%, transparent);
+}
+
+.account-pop a svg {
+  width: 20px;
+  height: 20px;
+  stroke-width: 2.75;
+  color: var(--c2);
+}
+
+.profile-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 24px;
+  padding-bottom: 8px;
+}
+
+.profile-head .dim {
+  overflow-wrap: anywhere;
+}
+
+.account-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 12px 20px;
+  margin: 0;
+}
+
+.account-facts dt {
+  color: var(--fg-faint);
+  font-weight: 700;
+}
+
+.account-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Phones: the nav is a bottom tab bar, so the menu keeps the top bar's right corner. */
+@media (max-width: 760px) {
+  .topbar {
+    position: relative;
+  }
+
+  .account-menu {
+    position: absolute;
+    right: 0;
+    top: 50%;
+    translate: 0 -50%;
+  }
+
+  .account-facts {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+
+  .account-facts dd {
+    margin-bottom: 10px;
+  }
+}

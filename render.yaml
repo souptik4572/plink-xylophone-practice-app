@@ -1,0 +1,51 @@
+# Plink's public demo on Render. Her own copy runs on the family laptop (`make dev`).
+# The app and API share one web service. Gemma 4 runs on Google's Gemini API, not
+# on Render. Logins and each user's practice live in Render Postgres.
+databases:
+  # Free: Render deletes it 30 days after creation (plus 14 days' grace), with no backups.
+  - name: plink-db
+    plan: free
+    # No connections from outside Render; the web service reaches it over the private network.
+    ipAllowList: []
+
+services:
+  - type: web
+    name: plink
+    runtime: docker
+    # TabPFN peaked at 2 GB on 1c-2g and 1.7 GB here, at 3-5 s per pick.
+    plan: 2c-4g
+    healthCheckPath: /api/health
+    # TabPFN's weights, kept between deploys.
+    disk:
+      name: plink-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: plink-db
+          property: connectionString
+      # Signs login tokens. Generated once; changing it logs everyone out.
+      - key: JWT_SECRET
+        generateValue: true
+      # Each new account starts with simulated practice, so TabPFN has a log to learn from.
+      - key: DEMO_SEED
+        value: "true"
+      # Gemma 4 on the Gemini API. The mixture-of-experts model (4B active) was as accurate
+      # as the dense gemma-4-31b-it in testing, and 5-10x faster.
+      - key: GEMINI_MODEL
+        value: gemma-4-26b-a4b-it
+      # Asked for when the Blueprint is created: a Gemini API key from Google AI Studio.
+      - key: GEMINI_API_KEY
+        sync: false
+      # The container sees every CPU on the host but may use only the plan's 2. With a
+      # thread per visible CPU, torch was throttled into 7x slower picks in testing.
+      - key: OMP_NUM_THREADS
+        value: "2"
+      - key: TABPFN_MODEL_VERSION
+        value: v3
+      - key: TABPFN_MODEL_CACHE_DIR
+        value: /data/tabpfn
+      # Asked for when the Blueprint is created: a Prior Labs key whose account accepted the TabPFN-3 licence.
+      - key: TABPFN_TOKEN
+        sync: false

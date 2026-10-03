@@ -1,0 +1,12 @@
+.git
+.env
+.env.*
+**/node_modules
+**/.venv
+**/__pycache__
+**/.pytest_cache
+frontend/dist
+frontend/public/basic-pitch
+backend/plink.db*
+backend/.jwt-secret
+backend/logs

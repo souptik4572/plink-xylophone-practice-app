@@ -247,9 +247,10 @@
   }
 }
 
-/* Grown-ups gate */
+/* Grown-ups gate, and the login */
 
-.gate {
+.gate,
+.login {
   max-width: 560px;
 }
 

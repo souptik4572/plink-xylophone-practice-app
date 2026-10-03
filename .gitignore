@@ -148,7 +148,8 @@ vite.config.ts.timestamp-*
 __pycache__/
 *.pyc
 .pytest_cache/
-backend/plink.db
+backend/plink.db*
+backend/.jwt-secret
 frontend/dist/
 frontend/public/basic-pitch/
 .DS_Store

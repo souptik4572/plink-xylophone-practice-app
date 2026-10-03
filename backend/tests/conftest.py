@@ -1,23 +1,47 @@
+import os
+
 import pytest
 from fastapi.testclient import TestClient
-from sqlmodel import Session, create_engine
+from sqlmodel import Session, SQLModel, create_engine, select
 from sqlmodel.pool import StaticPool
 
-from app import drill, models
-from app.main import app, seed_builtin_songs
+from app import config, drill, models
+from app.main import app
+
+EMAIL = "parent@example.com"
+PASSWORD = "correct horse battery"
+
+
+@pytest.fixture(autouse=True)
+def _no_gemini(monkeypatch):
+    """Tests never reach Google, even with a key in .env; test_gemini fakes the API."""
+    monkeypatch.setattr(config, "GEMINI_API_KEY", "")
 
 
 @pytest.fixture
 def engine():
-    eng = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    # TEST_DATABASE_URL runs every test against Postgres instead, e.g. postgresql+psycopg://…
+    url = os.getenv("TEST_DATABASE_URL")
+    if url:
+        eng = create_engine(url)
+        SQLModel.metadata.drop_all(eng)
+    else:
+        eng = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     models.init_db(eng)
-    with Session(eng) as db:
-        seed_builtin_songs(db)
     return eng
 
 
+def sign_up(client: TestClient, email: str = EMAIL) -> None:
+    """A new user, whose access token the client sends from then on."""
+    r = client.post("/api/auth/signup", json={"email": email, "password": PASSWORD})
+    assert r.status_code == 201, r.text
+    client.headers["Authorization"] = f"Bearer {r.json()['access_token']}"
+
+
 @pytest.fixture
-def client(engine):
+def anon(engine):
+    """A client that has not logged in."""
+
     def session():
         with Session(engine) as s:
             yield s
@@ -26,3 +50,15 @@ def client(engine):
     drill.clear_cache()
     yield TestClient(app)
     app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def client(anon):
+    sign_up(anon)
+    return anon
+
+
+@pytest.fixture
+def user_id(client, engine):
+    with Session(engine) as db:
+        return db.exec(select(models.User.id).where(models.User.email == EMAIL)).one()

@@ -43,12 +43,12 @@ def test_partial_update_keeps_other_settings(client):
     assert (s["child_name"], s["session_minutes"]) == ("Mira", 3)
 
 
-def test_progress_totals_and_streak(client, engine):
+def test_progress_totals_and_streak(client, engine, user_id):
     today = datetime.now(timezone.utc)
     ids = []
     with Session(engine) as db:
         for days_ago in (0, 1, 3):
-            s = PracticeSession(player="child", started_at=today - timedelta(days=days_ago))
+            s = PracticeSession(user_id=user_id, player="child", started_at=today - timedelta(days=days_ago))
             db.add(s)
             db.commit()
             db.refresh(s)

@@ -1,5 +1,5 @@
 import { createContext, useContext } from 'react'
-import type { Health, Settings } from '../api'
+import type { Account, Health, Settings } from '../api'
 import type { Instrument } from '../instrument'
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -26,6 +26,10 @@ export interface AppState {
   /** Bumped after data changes elsewhere (songs added, data deleted) so lists reload. */
   dataVersion: number
   bumpData: () => void
+  /** The grown-up who is logged in; null only when the server is off and free play runs alone. */
+  account: Account | null
+  setAccount: (a: Account | null) => void
+  logOut: () => void
 }
 
 export const AppContext = createContext<AppState | null>(null)

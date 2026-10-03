@@ -1,4 +1,4 @@
-"""Gemma coach via Ollama: lessons, parent note, praise, with fallbacks (spec 7.10).
+"""Gemma coach via Ollama, or the Gemini API on Render: lessons, parent note, praise, with fallbacks (spec 7.10).
 
 Code owns the notes: Gemma only groups them and writes words. Every reply is
 validated; on invalid output or a timeout the caller gets a fixed fallback.
@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 
 import httpx
 
-from app import config
+from app import config, gemini
 
 log = logging.getLogger("plink.coach")
 
@@ -37,6 +37,8 @@ def fallback_phrases(n: int) -> list[dict]:
 
 
 def _post(body: dict, timeout: float) -> dict:
+    if config.GEMINI_API_KEY:
+        return gemini.chat(body, timeout)
     r = httpx.post(f"{config.OLLAMA_URL}/api/chat", json=body, timeout=timeout)
     r.raise_for_status()
     return r.json()
@@ -49,7 +51,7 @@ def _log(job: str, ok: bool, seconds: float, reply: dict | None, error: str = ""
         "model": config.GEMMA_MODEL,
         "ok": ok,
         "seconds": round(seconds, 2),
-        # Ollama's own timing, including model load if it was cold.
+        # Ollama's own timing, including model load if it was cold (none from the Gemini API).
         "model_seconds": round((reply or {}).get("total_duration", 0) / 1e9, 2) or None,
         "prompt_tokens": (reply or {}).get("prompt_eval_count"),
         "eval_tokens": (reply or {}).get("eval_count"),

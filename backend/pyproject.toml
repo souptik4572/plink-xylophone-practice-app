@@ -11,8 +11,21 @@ dependencies = [
     "pandas>=2.2",
     "scikit-learn>=1.5",
     "tabpfn>=9.0",
+    "torch>=2.5",
     "python-dotenv>=1.0",
+    "argon2-cffi>=23.1",
+    "psycopg[binary]>=3.2",
+    "pyjwt>=2.10",
 ]
+
+# Render has no GPUs, and the default Linux torch wheel pulls gigabytes of CUDA libraries.
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [dependency-groups]
 dev = ["pytest>=8"]

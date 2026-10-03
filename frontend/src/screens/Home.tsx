@@ -42,7 +42,7 @@ export function Home() {
   const last = songs?.find((s) => s.id === lastSongId()) ?? songs?.[0]
 
   const steps = [
-    { done: serverUp && !!health?.ollama && !!health?.tabpfn, label: 'Plink’s local brain is on', hint: 'make dev, with Ollama running', href: undefined },
+    { done: serverUp && !!health?.gemma && !!health?.tabpfn, label: 'Plink’s local brain is on', hint: 'make dev, with Ollama running', href: undefined },
     { done: !!name, label: 'Tell Plink her name', hint: 'Used in praise and in your notes', href: '#/grownups/settings' },
     { done: (progress?.sessions ?? 0) > 0, label: 'Play a first session', hint: 'Five minutes, on screen or her xylophone', href: last ? `#/play/${last.id}/go` : '#/play' },
     { done: isCalibrated(instrument), label: 'Teach Plink her xylophone', hint: 'Optional: lets her play the real one', href: '#/grownups/calibrate' },

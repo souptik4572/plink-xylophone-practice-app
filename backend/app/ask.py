@@ -82,12 +82,12 @@ def _norm(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", s.lower()).strip()
 
 
-def find_song(db: Session, query: str) -> Song | None:
+def find_song(db: Session, user_id: int, query: str) -> Song | None:
     """Loose title matching: Gemma says "Jingle Bells", the library has "Jingle Bells (chorus)"."""
     q = _norm(query)
     if not q:
         return None
-    songs = list(db.exec(select(Song)).all())
+    songs = list(db.exec(select(Song).where(Song.user_id == user_id)).all())
     for s in songs:
         if q in (_norm(s.id), _norm(s.title)):
             return s
@@ -103,17 +103,17 @@ def _pct(p: float | None) -> float | None:
     return None if p is None else round(p, 2)
 
 
-def tool_get_progress(db: Session) -> dict[str, Any]:
-    p = summary.progress(db)
+def tool_get_progress(db: Session, user_id: int) -> dict[str, Any]:
+    p = summary.progress(db, user_id)
     p["weakest_jumps"] = [{**w, "expected": _pct(w["expected"])} for w in p["weakest_jumps"]]
     return p
 
 
-def tool_list_songs(db: Session) -> dict[str, Any]:
+def tool_list_songs(db: Session, user_id: int) -> dict[str, Any]:
     """Ranked in code, not by Gemma: a small model misreads a list of numbers
     (it called an 85% song the easiest when another was 87%)."""
-    prefs = get_settings(db)
-    ins = drill.insights(db)
+    prefs = get_settings(db, user_id)
+    ins = drill.insights(db, user_id)
     ready = {s["song_id"]: s["by_level"][prefs.help_level] for s in ins["songs"]} if ins["source"] == "tabpfn" else {}
     songs = [
         {
@@ -122,7 +122,7 @@ def tool_list_songs(db: Session) -> dict[str, Any]:
             "parts": len(song_phrases(s)),
             "first_try_prediction": _pct(ready.get(s.id)),
         }
-        for s in db.exec(select(Song)).all()
+        for s in db.exec(select(Song).where(Song.user_id == user_id)).all()
     ]
     songs.sort(key=lambda s: -1 if s["first_try_prediction"] is None else s["first_try_prediction"], reverse=True)
     scored = [s for s in songs if s["first_try_prediction"] is not None]
@@ -135,16 +135,16 @@ def tool_list_songs(db: Session) -> dict[str, Any]:
     }
 
 
-def tool_predict_song(db: Session, song: str = "") -> dict[str, Any]:
-    found = find_song(db, song)
+def tool_predict_song(db: Session, user_id: int, song: str = "") -> dict[str, Any]:
+    found = find_song(db, user_id, song)
     if found is None:
         return {"error": f"No song like '{song}' in her library. Use list_songs to see them."}
-    ins = drill.insights(db)
+    ins = drill.insights(db, user_id)
     if ins["source"] != "tabpfn":
         return {"song": found.title, "note": f"TabPFN is still learning her ({ins['rows_used']} notes so far), so there is no prediction yet."}
     entry = next(s for s in ins["songs"] if s["song_id"] == found.id)
     known = set(ins.get("known_levels") or [])
-    prefs = get_settings(db)
+    prefs = get_settings(db, user_id)
     return {
         "song": found.title,
         "first_try_by_help_level": {lv: (_pct(p) if lv in known else None) for lv, p in entry["by_level"].items()},
@@ -155,14 +155,14 @@ def tool_predict_song(db: Session, song: str = "") -> dict[str, Any]:
     }
 
 
-def tool_help_advice(db: Session) -> dict[str, Any]:
-    ins = drill.insights(db)
+def tool_help_advice(db: Session, user_id: int) -> dict[str, Any]:
+    ins = drill.insights(db, user_id)
     if ins["source"] != "tabpfn" or not ins["help"]:
         return {"note": f"TabPFN is still learning her ({ins['rows_used']} notes so far)."}
     h = ins["help"]
-    basis = db.get(Song, h["basis_song"])
+    basis = db.get(Song, (user_id, h["basis_song"]))
     return {
-        "current_help_level": get_settings(db).help_level,
+        "current_help_level": get_settings(db, user_id).help_level,
         "suggest": h["suggest"],
         "level": h["level"],
         "expected_now": _pct(h["now"]),
@@ -172,7 +172,7 @@ def tool_help_advice(db: Session) -> dict[str, Any]:
     }
 
 
-def tool_recent_sessions(db: Session, count: int = 3) -> dict[str, Any]:
+def tool_recent_sessions(db: Session, user_id: int, count: int = 3) -> dict[str, Any]:
     count = max(1, min(10, int(count)))
     return {
         "sessions": [
@@ -182,7 +182,7 @@ def tool_recent_sessions(db: Session, count: int = 3) -> dict[str, Any]:
                 **{k: s["stats"][k] for k in ("phrases", "notes", "first_try_pct", "minutes")},
                 "note_for_grown_up": s["parent_note"],
             }
-            for s in summary.sessions(db, count)
+            for s in summary.sessions(db, user_id, count)
         ]
     }
 
@@ -196,8 +196,8 @@ HANDLERS = {
 }
 
 
-def answer(db: Session, question: str, history: list[dict[str, str]]) -> dict[str, Any]:
-    prefs = get_settings(db)
+def answer(db: Session, user_id: int, question: str, history: list[dict[str, str]]) -> dict[str, Any]:
+    prefs = get_settings(db, user_id)
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": SYSTEM.format(name=prefs.child_name or "a young child", language=prefs.home_language)},
         *history[-MAX_HISTORY:],
@@ -218,14 +218,16 @@ def answer(db: Session, question: str, history: list[dict[str, str]]) -> dict[st
             reply = coach._post(body, config.GEMMA_TIMEOUT_S)
         except httpx.HTTPError as e:
             coach._log("ask", False, time.perf_counter() - t, None, f"{type(e).__name__}: {e}")
-            return {"answer": "Gemma isn't answering right now. Is Ollama running?", "tools": used, "seconds": round(time.perf_counter() - t, 1)}
+            hint = "Try again in a moment." if config.GEMINI_API_KEY else "Is Ollama running?"
+            return {"answer": f"Gemma isn't answering right now. {hint}", "tools": used, "seconds": round(time.perf_counter() - t, 1)}
         msg = reply.get("message", {})
         calls = msg.get("tool_calls") or []
         if not calls:
             coach._log("ask", True, time.perf_counter() - t, reply)
             text = (msg.get("content") or "").strip() or "Sorry, I don't have an answer for that."
             return {"answer": text, "tools": used, "seconds": round(time.perf_counter() - t, 1)}
-        messages.append({"role": "assistant", "content": msg.get("content", ""), "tool_calls": calls})
+        # The whole reply goes back, so the Gemini API gets its own parts (and thought signatures) again.
+        messages.append({**msg, "role": "assistant", "content": msg.get("content", ""), "tool_calls": calls})
         for call in calls:
             name = call.get("function", {}).get("name", "")
             args = call.get("function", {}).get("arguments") or {}
@@ -239,7 +241,8 @@ def answer(db: Session, question: str, history: list[dict[str, str]]) -> dict[st
                 result: dict[str, Any] = {"error": f"There is no tool called {name}."}
             else:
                 try:
-                    result = handler(db, **args)
+                    # Gemma's arguments can't name another user: a user_id among them is a TypeError.
+                    result = handler(db, user_id, **args)
                 except (TypeError, ValueError) as e:
                     result = {"error": f"Bad arguments for {name}: {e}"}
             used.append({"name": name, "args": args, "ok": "error" not in result})

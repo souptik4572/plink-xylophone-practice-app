@@ -401,7 +401,7 @@ function DataTab() {
         </div>
       ) : (
         <div className="row danger-zone">
-          <p className="alert">This can’t be undone. Built-in songs stay; everything else goes.</p>
+          <p className="alert">This can’t be undone. Built-in songs and your login stay; everything else goes.</p>
           <Button variant="outline" t={3} className="danger" icon={<Trash2 aria-hidden />} onClick={remove}>
             Yes, delete everything
           </Button>

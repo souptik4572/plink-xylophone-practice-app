@@ -145,7 +145,7 @@ def weakest_jumps(history: pd.DataFrame, labels: list[str], k: int = 3, model=ta
 
 
 _lock = threading.Lock()
-_cache: dict[tuple[int, str | None], tuple[int, Pick]] = {}
+_cache: dict[tuple[int, int, str | None], tuple[int, Pick]] = {}
 
 
 # Help levels from most help to least.
@@ -173,19 +173,20 @@ def advise(by_level: dict[str, float], current: str, target: float, known: set[s
     return {"suggest": "stay", "level": current, "now": by_level[current], "then": None}
 
 
-_insights_cache: dict[str, dict] = {}
+# Each user's latest insights, keyed by a hash of what they were computed from.
+_insights_cache: dict[int, tuple[str, dict]] = {}
 
 
-def insights(db: Session) -> dict:
+def insights(db: Session, user_id: int) -> dict:
     """One TabPFN fit, then her expected first-try success for every song at every help level."""
-    child = db.exec(select(Attempt).where(Attempt.player == "child").order_by(col(Attempt.id))).all()
+    child = db.exec(select(Attempt).where(Attempt.user_id == user_id, Attempt.player == "child").order_by(col(Attempt.id))).all()
     history = frame([r.model_dump(include={*FEATURES, LABEL}) for r in child])
     if cold_start(history):
         return {"source": "fallback", "rows_used": len(history), "songs": [], "help": None}
 
-    prefs = get_settings(db)
-    songs = list(db.exec(select(Song).order_by(col(Song.created_at))).all())
-    offsets = bar_offsets(db)
+    prefs = get_settings(db, user_id)
+    songs = list(db.exec(select(Song).where(Song.user_id == user_id).order_by(col(Song.created_at))).all())
+    offsets = bar_offsets(db, user_id)
     key = hashlib.sha1(
         json.dumps(
             [len(child), child[-1].id, prefs.help_level, prefs.drill_target, offsets, [(s.id, s.notes, s.phrases) for s in songs]],
@@ -193,14 +194,15 @@ def insights(db: Session) -> dict:
         ).encode()
     ).hexdigest()
     with _lock:
-        if key in _insights_cache:
-            return _insights_cache[key]
+        hit = _insights_cache.get(user_id)
+        if hit and hit[0] == key:
+            return hit[1]
 
     plays = {
         (s, p): n
         for s, p, n in db.exec(
             select(Attempt.song_id, Attempt.phrase_idx, func.count())
-            .where(Attempt.pos_in_phrase == 0)
+            .where(Attempt.user_id == user_id, Attempt.pos_in_phrase == 0)
             .group_by(Attempt.song_id, Attempt.phrase_idx)
         ).all()
     }
@@ -241,8 +243,7 @@ def insights(db: Session) -> dict:
         "help": {**advise(by_song[basis], prefs.help_level, prefs.drill_target, known), "basis_song": basis},
     }
     with _lock:
-        _insights_cache.clear()
-        _insights_cache[key] = out
+        _insights_cache[user_id] = (key, out)
     return out
 
 
@@ -253,9 +254,13 @@ def clear_cache() -> None:
         _insights_cache.clear()
 
 
-def _compute(db: Session, session_id: int, song_id: str | None, last: Attempt | None) -> Pick:
-    offsets = bar_offsets(db)
-    songs = [db.get(Song, song_id)] if song_id else list(db.exec(select(Song).order_by(col(Song.created_at))).all())
+def _compute(db: Session, user_id: int, session_id: int, song_id: str | None, last: Attempt | None) -> Pick:
+    offsets = bar_offsets(db, user_id)
+    songs = (
+        [db.get(Song, (user_id, song_id))]
+        if song_id
+        else list(db.exec(select(Song).where(Song.user_id == user_id).order_by(col(Song.created_at))).all())
+    )
     if not songs or songs[0] is None:
         raise LookupError(song_id)
 
@@ -263,11 +268,11 @@ def _compute(db: Session, session_id: int, song_id: str | None, last: Attempt | 
         (s, p): n
         for s, p, n in db.exec(
             select(Attempt.song_id, Attempt.phrase_idx, func.count())
-            .where(Attempt.pos_in_phrase == 0)
+            .where(Attempt.user_id == user_id, Attempt.pos_in_phrase == 0)
             .group_by(Attempt.song_id, Attempt.phrase_idx)
         ).all()
     }
-    prefs = get_settings(db)
+    prefs = get_settings(db, user_id)
     ctx = {
         "input_source": last.input_source if last else "pointer",
         "mins_into_session": last.mins_into_session if last else 0.0,
@@ -280,7 +285,7 @@ def _compute(db: Session, session_id: int, song_id: str | None, last: Attempt | 
             rows = candidate_rows(bars[p["start"] : p["end"] + 1], plays.get((song.id, i), 0), **ctx)
             cands.append(Candidate(song.id, i, rows))
 
-    child = db.exec(select(Attempt).where(Attempt.player == "child")).all()
+    child = db.exec(select(Attempt).where(Attempt.user_id == user_id, Attempt.player == "child")).all()
     history = frame([r.model_dump(include={*FEATURES, LABEL}) for r in child])
     result = pick(history, cands, (last.song_id, last.phrase_idx) if last else None, target=prefs.drill_target)
     if result.source == "tabpfn":
@@ -288,27 +293,27 @@ def _compute(db: Session, session_id: int, song_id: str | None, last: Attempt | 
     return result
 
 
-def next_drill(db: Session, session_id: int, song_id: str | None) -> Pick:
+def next_drill(db: Session, user_id: int, session_id: int, song_id: str | None) -> Pick:
     """Cached per session and latest attempt, so the background refresh usually answers it."""
     with _lock:
         last = db.exec(
             select(Attempt).where(Attempt.session_id == session_id).order_by(col(Attempt.id).desc()).limit(1)
         ).first()
-        key = (session_id, song_id)
+        key = (user_id, session_id, song_id)
         stamp = last.id if last else 0
         hit = _cache.get(key)
         if hit and hit[0] == stamp:
             return hit[1]
-        result = _compute(db, session_id, song_id, last)
+        result = _compute(db, user_id, session_id, song_id, last)
         _cache[key] = (stamp, result)
         return result
 
 
-def refresh(engine: Engine, session_id: int, song_id: str | None) -> None:
+def refresh(engine: Engine, user_id: int, session_id: int, song_id: str | None) -> None:
     """Background task after each phrase's attempts land: pick the next drill before she asks."""
     try:
         with Session(engine) as db:
-            next_drill(db, session_id, song_id)
+            next_drill(db, user_id, session_id, song_id)
     except Exception:
         log.exception("Background drill refresh failed")
 

@@ -2,15 +2,15 @@ import { useEffect, useState } from 'react'
 
 /**
  * Hash routes, so a refresh or a bookmark lands on the same screen:
- *   #/  #/play  #/play/twinkle  #/play/twinkle/go  #/free/mary  #/songs  #/songs/new  #/grownups/settings
+ *   #/  #/play  #/play/twinkle  #/play/twinkle/go  #/free/mary  #/songs  #/songs/new  #/grownups/settings  #/account/logout
  */
 export interface Route {
-  screen: 'home' | 'play' | 'free' | 'songs' | 'grownups'
+  screen: 'home' | 'play' | 'free' | 'songs' | 'grownups' | 'account'
   arg?: string
   go?: boolean
 }
 
-const SCREENS = new Set(['play', 'free', 'songs', 'grownups'])
+const SCREENS = new Set(['play', 'free', 'songs', 'grownups', 'account'])
 
 export function parseRoute(hash: string): Route {
   const [screen, arg, go] = hash.replace(/^#\/?/, '').split('/').map(decodeURIComponent)

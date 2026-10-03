@@ -1,27 +1,29 @@
-"""Milestone 0 smoke check: Gemma answers via Ollama, TabPFN predicts on a toy table."""
+"""Smoke check: Gemma answers (Ollama, or the Gemini API with GEMINI_API_KEY) in text and JSON, and TabPFN predicts on a toy table."""
 
 import time
 
-import httpx
 import numpy as np
 import pandas as pd
 
-from app import config  # loads .env first: tabpfn reads TABPFN_* settings at import
+from app import coach, config  # loads .env first: tabpfn reads TABPFN_* settings at import
 
 from tabpfn import TabPFNClassifier  # noqa: E402
 
+where = "the Gemini API" if config.GEMINI_API_KEY else "Ollama"
 t = time.time()
-r = httpx.post(
-    f"{config.OLLAMA_URL}/api/chat",
-    json={
+r = coach._post(
+    {
         "model": config.GEMMA_MODEL,
         "stream": False,
+        "think": False,  # as every call in the app sets it
         "messages": [{"role": "user", "content": "Say hello to a child learning xylophone, in six words."}],
     },
-    timeout=120,
+    120,
 )
-r.raise_for_status()
-print(f"Gemma ({config.GEMMA_MODEL}, {time.time() - t:.1f}s): {r.json()['message']['content'].strip()}")
+print(f"Gemma ({config.GEMMA_MODEL} on {where}, {time.time() - t:.1f}s): {r['message']['content'].strip()}")
+# Lessons, notes, praise and song cards all ask for JSON that matches a schema.
+praise = coach.praise_lines("", "English")
+print(f"Gemma JSON ({praise.seconds:.1f}s): {praise.source}, {len(praise.lines)} lines {praise.error}".rstrip())
 
 rng = np.random.default_rng(0)
 X = pd.DataFrame({"abs_jump": rng.integers(0, 8, 80), "mins": rng.uniform(0, 5, 80)})

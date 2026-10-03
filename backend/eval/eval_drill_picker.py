@@ -1,6 +1,7 @@
 """Benchmark the drill picker's model: leave-one-session-out over her real sessions (spec 7.9).
 
     make eval                      # her real child sessions from plink.db
+    make eval ARGS="--email you@example.com"   # when several accounts have practised
     make eval ARGS=--synthetic     # pipeline smoke test on a simulated child
 
 Compares TabPFN with a majority-class guess, a per-jump miss-rate lookup and
@@ -24,7 +25,7 @@ from sqlmodel import Session, select
 
 from app import config  # loads .env before tabpfn is imported
 from app.features import FEATURES, LABEL, frame
-from app.models import Attempt, engine
+from app.models import Attempt, User, engine
 
 CATEGORICAL = ["input_source", "help_level"]
 NUMERIC = [f for f in FEATURES if f not in CATEGORICAL]
@@ -66,9 +67,19 @@ MODELS = {
 }
 
 
-def load_real() -> pd.DataFrame:
+def child_rows(email: str | None) -> list[Attempt]:
+    """One child's rows: the account named by --email, or the only one that has practised."""
     with Session(engine) as db:
-        rows = db.exec(select(Attempt).where(Attempt.player == "child")).all()
+        query = select(Attempt).where(Attempt.player == "child")
+        if email:
+            query = query.join(User).where(User.email == email.strip().lower())
+        rows = list(db.exec(query).all())
+    if len({r.user_id for r in rows}) > 1:
+        sys.exit("Several accounts have practised here: pick one with ARGS='--email you@example.com'.")
+    return rows
+
+
+def load_real(rows: list[Attempt]) -> pd.DataFrame:
     if not rows:
         return pd.DataFrame(columns=[*FEATURES, LABEL, "session_id"])
     df = frame([r.model_dump(include={*FEATURES, LABEL}) for r in rows])
@@ -76,10 +87,9 @@ def load_real() -> pd.DataFrame:
     return df
 
 
-def calibration() -> str:
+def calibration(rows: list[Attempt]) -> str:
     """How TabPFN's live per-note predictions compared with what she then did."""
-    with Session(engine) as db:
-        rows = db.exec(select(Attempt).where(Attempt.player == "child", Attempt.predicted_success != None)).all()  # noqa: E711
+    rows = [r for r in rows if r.predicted_success is not None]
     if len(rows) < 10:
         return f"\nLive calibration: {len(rows)} notes played with a TabPFN prediction so far (need 10)."
     p = np.array([r.predicted_success for r in rows])
@@ -120,6 +130,7 @@ def main() -> int:
     ap.add_argument("--synthetic", action="store_true", help="use a simulated child instead of plink.db")
     ap.add_argument("--sessions", type=int, default=12, help="simulated sessions (with --synthetic)")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--email", help="whose practice to use, when several accounts have practised")
     args = ap.parse_args()
 
     if args.synthetic:
@@ -128,7 +139,8 @@ def main() -> int:
         df = simulate(args.sessions, args.seed)
         source = f"**SIMULATED child** (seed {args.seed}): a pipeline check, not her data"
     else:
-        df = load_real()
+        rows = child_rows(args.email)
+        df = load_real(rows)
         source = f"her real sessions from `{config.DB_PATH.name}`"
 
     n_sessions = df["session_id"].nunique()
@@ -138,7 +150,7 @@ def main() -> int:
         return 0
 
     table, _ = evaluate(df)
-    live = calibration() if not args.synthetic else ""
+    live = calibration(rows) if not args.synthetic else ""
     print(f"Drill-picker benchmark: leave-one-session-out, {n_sessions} sessions, {len(df)} rows, "
           f"{df[LABEL].mean():.0%} first-try correct.")
     print(f"Data: {source}.\n")

@@ -24,7 +24,7 @@ def simulate(n_sessions: int = 12, seed: int = 0) -> pd.DataFrame:
     library = []
     for s in songs:
         bars = fit_song([m for m, _ in parse_notes(s["notes"])], config.DEFAULT_OFFSETS).bars
-        library.append((s["id"], [bars[p["start"] : p["end"] + 1] for p in fallback_phrases(len(bars))]))
+        library.append((s["id"], [(p["start"], bars[p["start"] : p["end"] + 1]) for p in fallback_phrases(len(bars))]))
 
     seen: dict[tuple[str, int], int] = {}
     out = []
@@ -34,7 +34,7 @@ def simulate(n_sessions: int = 12, seed: int = 0) -> pd.DataFrame:
         song_id, phrases = library[rng.integers(len(library))]
         mins, idx = 0.0, 0
         while mins < config.SESSION_MINUTES:
-            bars = phrases[idx % len(phrases)]
+            start, bars = phrases[idx % len(phrases)]
             key = (song_id, idx % len(phrases))
             rows = candidate_rows(bars, seen.get(key, 0), str(source), mins)
             rows["replays_before"] = int(rng.random() < 0.2)
@@ -53,8 +53,20 @@ def simulate(n_sessions: int = 12, seed: int = 0) -> pd.DataFrame:
                     + SOURCE_EFFECT[r["input_source"]]
                 )
                 ok = rng.random() < 1 / (1 + np.exp(-logit))
-                out.append({**r.to_dict(), "first_try_correct": bool(ok), "session_id": session})
-                mins += rng.uniform(2.5, 6.0) / 60 * (1 if ok else 2)
+                secs = rng.uniform(2.5, 6.0) * (1 if ok else 2)
+                out.append(
+                    {
+                        **r.to_dict(),
+                        "first_try_correct": bool(ok),
+                        "session_id": session,
+                        "song_id": song_id,
+                        "phrase_idx": key[1],
+                        "note_idx": start + r["pos_in_phrase"],
+                        "response_ms": round(secs * 1000),
+                        "wrong_before_correct": int(not ok),
+                    }
+                )
+                mins += secs / 60
             seen[key] = seen.get(key, 0) + 1
             idx += 1
     df = pd.DataFrame(out)

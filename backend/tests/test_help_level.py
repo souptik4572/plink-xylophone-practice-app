@@ -1,11 +1,11 @@
 import sqlite3
 
 from sqlalchemy import inspect
-from sqlmodel import Session, create_engine, select
+from sqlmodel import Session, col, create_engine, select
 
 from app import models
 from app.features import FEATURES, candidate_rows
-from app.models import Attempt
+from app.models import Attempt, User
 from tests.test_api_play import phrase0
 
 
@@ -63,7 +63,9 @@ def test_existing_database_gains_new_columns(tmp_path):
     assert {"help_level", "predicted_success"} <= {c["name"] for c in inspect(eng).get_columns("attempt")}
     assert {"help_level", "parent_gate"} <= {c["name"] for c in inspect(eng).get_columns("settings")}
     with Session(eng) as db:
+        owner = db.exec(select(User).where(col(User.email).is_(None))).one()
         assert db.get(Attempt, 1).help_level == "some"
-        s = models.get_settings(db)
+        assert db.get(Attempt, 1).user_id == owner.id
+        s = models.get_settings(db, owner.id)
         assert (s.child_name, s.help_level, s.parent_gate) == ("Mira", "some", True)
     models.init_db(eng)  # running again is harmless

@@ -182,3 +182,102 @@ Far too little data to claim a win. The benchmark also exposed a milestone 6 bug
 - **React crash in Ask Plink.** "destroy is not a function": Chrome's `scrollIntoView` now returns a Promise, and an arrow-bodied `useEffect` handed it to React as a cleanup. Fixed with a block body.
 
 Tests: 169 pytest, 91 vitest; typecheck and build clean. **Not committed:** the user asked to review first. The user's sessions (1–3, 5–7) were untouched; scripted runs were all tester sessions and were removed.
+
+## Public demo on Render (Fri 2 Oct)
+
+Entering **Best Use of Render**, a featured category in challenge 78; judges ask whether a project uses it "in a meaningful way". The user chose: Render hosts only the public demo, and her copy stays on the laptop.
+
+- Built: a `render.yaml` Blueprint.
+  - `plink` (web service, `2c-4g`, 1 GB disk) serves the built app and the API from one container.
+  - `plink-gemma` (private service, `4c-16g`, 15 GB disk) runs Ollama with no public address; only `plink` reaches it, over Render's private network.
+  - An environment group holds `GEMMA_MODEL` for both services.
+- The `Dockerfile` builds the app with pnpm, then the API with uv. On Linux, torch now comes from PyTorch's CPU index: 18 CUDA packages and triton left the lockfile, and the Mac's install is unchanged.
+- `eval/seed_demo.py` fills an empty database with 6 simulated sessions (373 attempts), so TabPFN is live on the first visit. Only the start command in `render.yaml` runs it, so a copy started any other way never gets invented rows. `OLLAMA_URL` now also accepts Render's bare `host:port`.
+- Spec exceptions, for the Render demo only: cloud hosting (a section 4 non-goal), binding to `0.0.0.0` (section 6), and network calls beyond `localhost` (directive 14.6). `make dev` is unchanged.
+- Render has no GPUs. On this Mac, CPU only with 4 threads, `gemma4:e4b` wrote 12.4 tok/s. Gemma's timeouts are raised only on Render (180 / 300 / 900 s).
+- Broke: **threads against the CPU limit.** In a container limited to 1 CPU, torch saw all 10 CPUs and started 10 threads. The kernel throttled it for 486 s, and picks took 23–38 s; the first took 282 s, including the weight download. Setting `OMP_NUM_THREADS` to the plan's CPUs fixed it, with 0 s throttled. Ollama did the same (`n_threads = 10` under a 4-CPU limit) and has no server setting for it, so the Gemma image re-creates the model with `PARAMETER num_thread`. Vision, tools and thinking survive that, and a small test model went from 421 to 626 tok/s.
+- Broke: the uv download cache was left in the image (1.1 GB). `UV_NO_CACHE=1` took the image from 3.47 to 2.06 GB.
+- TabPFN in Docker on this Mac (linux/arm64), on the 373-row demo log, with threads matched:
+
+  | Limits | Next drill | Progress | Insights | Peak memory |
+  | --- | --- | --- | --- | --- |
+  | 1 CPU, 2 GB | 6.4 s | 5.1 s | 9.3 s | 2048 MB (at the limit) |
+  | 2 CPUs, 4 GB | 3.4 s | 2.7 s | 4.9 s | 1727 MB |
+
+  So the web service is `2c-4g`. Its first pick was 80% expected success (target 80%), learning from all 373 rows.
+- Privacy on the demo: audio still never leaves the tab; a song-card photo goes to the demo's server to be read, and is not stored.
+- Not done yet: the first deploy from the user's Render account, and Gemma's real speed on Render's CPUs. Gemma e4b could not be run in Docker here: the Docker VM has 8 GB.
+
+Tests: 170 pytest, 91 vitest.
+
+## Accounts and login (Sat 3 Oct)
+
+The user asked for authentication and authorization with email and password only: SQLite on the laptop as before, and Render's Postgres for the hosted copy. Mid-build they added: "JWT token with userId in it - an access token and a refresh token mechanism". Spec section 4 listed accounts and multi-user support as non-goals; this is at the user's request. Their choices: the laptop logs in too, each new demo account gets simulated practice, and Render's free Postgres plan.
+
+- Built:
+  - `users` and `refreshtoken` tables. Every other row (songs, sessions, attempts, settings, calibration) carries a `user_id`. Each user gets their own copy of the built-in songs, so a Gemma lesson, and the lyric typed for it, never reaches another family.
+  - Passwords are hashed with Argon2id. The access token is a 15-minute HS256 JWT whose `sub` is the user id. It is sent as a Bearer header, held only in the page's memory, and checked without touching the database. The refresh token is a 30-day JWT in an HttpOnly, SameSite=Strict cookie that only `/api/auth` receives. Its `jti` is stored, so each refresh rotates it and logout revokes it.
+  - Every `/api` route except health and the four auth routes reads the user from the token and touches only that user's rows. Another user's session or song id gets a 404. Ask Plink's tools take the user from the server; a Gemma tool argument naming another user is rejected. TabPFN's caches are keyed per user.
+  - `DATABASE_URL` switches to Postgres through psycopg 3; when unset, the database is `backend/plink.db`. `render.yaml` adds `plink-db` (free plan, no connections from outside Render), a generated `JWT_SECRET`, and `DEMO_SEED`. That seeds each new account at sign-up, replacing the old seed-the-database step at start.
+  - App: a login and sign-up screen in the house style, Log out under Grown-ups → Data, and a silent refresh-and-retry when an access token runs out.
+  - Migration: on a `plink.db` from before accounts, the file is copied to `plink.db.before-accounts`. `song` is rebuilt because its primary key gains `user_id`, and every row without an owner goes to one user with no email. The first sign-up claims that user.
+- Broke: **the migration ran on the user's real `plink.db` mid-build.** `make dev` was running with `--reload`, so each save of `models.py` restarted the server and ran `init_db`. It ran twice, once per draft, and the second run overwrote the first backup. Every row survived; I checked each original column against the backup: 36 attempts, 6 sessions, 5 songs with their lessons, settings and calibration. The draft left behind an unused `account` table, an empty `loginsession` table, and `account_id` columns.
+- Broke: two tabs refreshing with the same cookie would log one of them out once rotation existed. A rotated token now stays good for 30 s, and its row is locked during the refresh. 8 concurrent refreshes on Postgres: all 200, one new cookie, no fork.
+- Not needed after all: a `timezone=utc` connection option for Postgres. SQLModel 0.0.47 stores and returns datetimes as UTC (`UTCDateTime`); a negative control against a server set to UTC+14 showed it, so the option was removed.
+- Numbers (this Mac, Postgres 17 in Docker): sign-up with demo seeding (373 rows) took about 240 ms. That account's first TabPFN pick took 0.8 s (Twinkle part 4 at 82%, target 80%), and insights took 1.0 s.
+- Verified:
+  - All 188 pytest on SQLite, then again on Postgres 17 (`TEST_DATABASE_URL`), including against a server set to UTC+14.
+  - Mutating three authorization filters failed their tests each time.
+  - Headless Chrome on Postgres, 17 checks: login screen, sign-up, staying logged in across a reload, no token in web storage, the HttpOnly cookie, logout, wrong password, a second family's isolation, a duplicate email, and a 390 px phone.
+- Not done:
+  - No rate limit on login attempts.
+  - No password reset, which would need email.
+  - An access token stays valid for up to 15 minutes after logout (the refresh token is revoked at once).
+  - The first real deploy with Postgres.
+
+Tests: 188 pytest, 96 vitest. **Not committed.**
+
+## Gemma on the Gemini API for the demo (Sat 3 Oct)
+
+The user decided Render won't host a Gemma model: "we will simply use the gemini API for the same with gemma model". `render.yaml` loses the `plink-gemma` private service (`4c-16g`, 15 GB disk), its Ollama image (`deploy/ollama/`), the shared `gemma-model` group and the CPU-sized timeouts. It gains `GEMINI_API_KEY` (asked for at Blueprint creation) and `GEMINI_MODEL`. The laptop keeps Ollama.
+
+- Built: one adapter (`app/gemini.py`) at the seam every Gemma call already passes through (`coach._post`). The coach and Ask Plink still speak Ollama's chat format. With `GEMINI_API_KEY` set, the adapter turns a request into `generateContent` and the reply back:
+  - system prompt → `systemInstruction`; JSON schema → `responseJsonSchema`; `think` → `thinkingLevel` "high" or "minimal"; images → `inlineData`;
+  - tools → `functionDeclarations`, and answers → `functionResponse` parts with the call's id.
+  - The model's own parts go back unchanged on the next turn. Gemma 4 on the API attaches a `thoughtSignature` to each function call, even with thinking at "minimal".
+- The two Gemma 4 models the API serves (`gemma-4-26b-a4b-it`, `gemma-4-31b-it`), every job, live:
+
+  | | 26B-A4B (mixture of experts) | 31B (dense) |
+  | --- | --- | --- |
+  | Lessons valid (5 built-ins × 2) | 7/10, median 6.5 s | 7/10, median 55 s |
+  | Song card, 14 notes | 14/14 in 9.7 s | 14/14 in 86 s |
+  | Ask Plink tool call | right tool, 5.0 s | right tool, 49 s |
+
+  The demo uses 26B-A4B. Through the real endpoints on a seeded account: Ask Plink 5.9 s, lesson 6.4 s, parent note 3.7 s, praise 4.2 s.
+- Broke:
+  - The JSON schema is followed loosely. 2 of 8 lesson replies were valid JSON followed by a stray "```", so the adapter keeps only the first JSON object.
+  - Some lessons still overlap or skip notes, and the validator sends those to the fixed phrases. On the laptop's e4b, all 5 built-ins got valid lessons.
+  - Thinking made lessons worse: 1 of 10 valid at "high". Lessons stay at "minimal"; only the card count thinks.
+  - The API answered 500 "Internal error" or 503 "high demand" on 4 of 10 lesson calls to 31B, so the adapter tries those twice more, 1 s and 3 s later. A 429 quota is not retried.
+  - Single calls sometimes took over 30 s (one praise and some lessons timed out), and the callers fall back as before.
+  - With no thinking setting, Gemma thinks: a six-word hello took 30 s, and 1.4 s with "minimal". Every app call sets it.
+- Health no longer calls Ollama when the key is set, so Render's frequent probes cost no API calls. The field is renamed `gemma`, since it isn't always Ollama.
+- Tests run with the key blanked, so they never reach Google, even with a key in `.env`.
+- Privacy on the demo: song-card photos, the practice numbers behind a parent note, and Ask Plink questions now go to Google. A laptop without `GEMINI_API_KEY` sends nothing.
+
+Tests: 198 pytest, 96 vitest. **Not committed.**
+
+## Account menu and page (Sat 3 Oct)
+
+The user asked for a logged-in user dashboard, logout, and profile options. Their choices: an avatar menu in the top bar whose Account and Log out links both pass the grown-up sum; profile options limited to a display name and Delete account; on the page, her practice at a glance and the account's details.
+
+- Built:
+  - The avatar shows the initial of the grown-up's name, or of their email, and opens a small menu (who's logged in, Account, Log out). It closes on Escape or an outside click; on phones it keeps the top bar's right corner while the nav sits at the bottom.
+  - Log out asks to confirm, because afterwards she can't play until a grown-up logs back in. Logging back in lands on Home.
+  - The page (`#/account`) holds: your name (`users.display_name`, added to existing databases at start); her stars, streak, sessions and notes, the latest note from Gemma, and shortcuts to Progress, Settings and Songs; email, member since, where her data is kept (SQLite on the laptop or Render Postgres) and where Gemma runs.
+  - Delete account removes the login and everything it owns. It asks for the password again; a wrong one answers 403, not 401, because the app takes a 401 for an expired login and would refresh or log out.
+  - The "Your login" card from the Data tab is gone; the menu replaces it.
+- Broke: the practice card said "No practice yet" while `/api/progress` was still loading (a TabPFN fit, a second or more on a seeded account). It shows "Loading…" until the numbers arrive.
+- Verified: headless Chrome against a separate server, 29 checks, twice. They cover the menu (Escape, outside click, focus), the sum before both pages (in a fresh tab too), saving the name and keeping it across a reload, the logout confirmation, a wrong and a right password for deletion, the deleted login failing, and the menu and page at 390 px.
+
+Tests: 205 pytest, 97 vitest. **Not committed.**

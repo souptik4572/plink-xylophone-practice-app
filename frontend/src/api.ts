@@ -4,17 +4,102 @@ import type { ToolUse } from './kids/answer'
 import type { HelpAdvice } from './kids/help'
 import type { ApiSong } from './songs/songs'
 
-async function call<T>(path: string, init?: RequestInit): Promise<T> {
-  const r = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...init })
-  if (!r.ok) throw new Error(`${init?.method ?? 'GET'} ${path}: ${r.status}`)
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message)
+  }
+}
+
+// The access token lives only in memory; the refresh token is an HttpOnly cookie script can't read.
+let accessToken: string | null = null
+let refreshing: Promise<Account | null> | null = null
+let onSignedOut = () => {}
+
+/** Runs when the login has run out and can't be refreshed: the app shows the login screen. */
+export const whenSignedOut = (fn: () => void) => {
+  onSignedOut = fn
+}
+
+async function call<T>(path: string, init?: RequestInit, retried = false): Promise<T> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (accessToken) headers.Authorization = `Bearer ${accessToken}`
+  const r = await fetch(path, { headers, ...init })
+  // Access tokens last 15 minutes: swap the refresh cookie for a new one, then try once more.
+  if (r.status === 401 && !retried && !path.startsWith('/api/auth/')) {
+    if (await refreshLogin()) return call<T>(path, init, true)
+    onSignedOut()
+  }
+  if (!r.ok) throw new ApiError(`${init?.method ?? 'GET'} ${path}: ${r.status}`, r.status)
   return r.json() as Promise<T>
 }
 
 const post = <T>(path: string, body: unknown) => call<T>(path, { method: 'POST', body: JSON.stringify(body) })
 
+export interface Account {
+  email: string
+  /** The grown-up's own name for the account menu; may be empty. */
+  display_name: string
+}
+
+interface Tokens extends Account {
+  access_token: string
+}
+
+function keep(t: Tokens): Account {
+  accessToken = t.access_token
+  return { email: t.email, display_name: t.display_name }
+}
+
+/**
+ * A new access token for the refresh cookie, or null with no login. One request at a time,
+ * since each refresh replaces the cookie (and React runs start-up effects twice in dev).
+ */
+export function refreshLogin(): Promise<Account | null> {
+  refreshing ??= fetch('/api/auth/refresh', { method: 'POST' })
+    .then(async (r) => {
+      if (r.ok) return keep(await r.json())
+      accessToken = null
+      return null
+    })
+    .finally(() => {
+      refreshing = null
+    })
+  return refreshing
+}
+
+export const signUp = (email: string, password: string) => post<Tokens>('/api/auth/signup', { email, password }).then(keep)
+
+export const logIn = (email: string, password: string) => post<Tokens>('/api/auth/login', { email, password }).then(keep)
+
+export async function logOut() {
+  accessToken = null
+  await post('/api/auth/logout', {})
+}
+
+export interface AccountDetails extends Account {
+  created_at: string
+  /** Where her data is kept: SQLite on the laptop, Postgres on the demo. */
+  storage: 'sqlite' | 'postgres'
+  gemma: { where: 'ollama' | 'gemini'; model: string }
+}
+
+export const getAccount = () => call<AccountDetails>('/api/account')
+
+export const saveAccount = (display_name: string) =>
+  call<AccountDetails>('/api/account', { method: 'PUT', body: JSON.stringify({ display_name }) })
+
+/** Deletes the login and all its data. A wrong password is a 403, so the login itself stays. */
+export async function deleteAccount(password: string) {
+  await call<{ deleted: boolean }>('/api/account', { method: 'DELETE', body: JSON.stringify({ password }) })
+  accessToken = null
+}
+
 export interface Health {
   ok: boolean
-  ollama: boolean
+  gemma: boolean
   gemma_model: string
   tabpfn: boolean
 }

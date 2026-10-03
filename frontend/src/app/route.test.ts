@@ -6,6 +6,7 @@ describe('parseRoute', () => {
     expect(parseRoute('#/play/twinkle/go')).toEqual({ screen: 'play', arg: 'twinkle', go: true })
     expect(parseRoute('#/free/mary')).toEqual({ screen: 'free', arg: 'mary', go: false })
     expect(parseRoute('#/grownups/settings')).toMatchObject({ screen: 'grownups', arg: 'settings' })
+    expect(parseRoute('#/account/logout')).toMatchObject({ screen: 'account', arg: 'logout' })
   })
 
   it('falls back to home for empty or unknown routes', () => {

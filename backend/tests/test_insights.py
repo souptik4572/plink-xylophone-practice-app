@@ -45,12 +45,12 @@ def test_advise_at_the_ends_of_the_ladder():
     assert advise({"lots": 0.3, "some": 0.2, "little": 0.1}, current="lots", target=0.8)["suggest"] == "stay"
 
 
-def seed(engine, n=40, levels=("some",)):
+def seed(engine, user_id, n=40, levels=("some",)):
     rows = history(n).to_dict("records")
     for i, r in enumerate(rows):
         r["help_level"] = levels[i % len(levels)]
     with Session(engine) as db:
-        db.add(PracticeSession(id=1, player="child"))
+        db.add(PracticeSession(id=1, user_id=user_id, player="child"))
         db.commit()
         for i, r in enumerate(rows):
             prev = None if r["prev_bar"] is None or r["prev_bar"] != r["prev_bar"] else int(r["prev_bar"])
@@ -59,7 +59,7 @@ def seed(engine, n=40, levels=("some",)):
                     **{k: r[k] for k in ["input_source", "target_bar", "jump", "abs_jump", "pos_in_phrase", "phrase_len",
                                          "times_seen_phrase", "replays_before", "mins_into_session", "help_level"]},
                     is_repeat=bool(r["is_repeat"]), prev_bar=prev, first_try_correct=bool(r["first_try_correct"]),
-                    player="child", session_id=1, song_id="twinkle", phrase_idx=0, note_idx=i, response_ms=900,
+                    user_id=user_id, player="child", session_id=1, song_id="twinkle", phrase_idx=0, note_idx=i, response_ms=900,
                     wrong_before_correct=0,
                 )
             )
@@ -71,9 +71,9 @@ def test_insights_cold_start(client):
     assert body["source"] == "fallback" and body["songs"] == [] and body["help"] is None
 
 
-def test_insights_score_every_song_at_every_level(client, engine, monkeypatch):
+def test_insights_score_every_song_at_every_level(client, engine, user_id, monkeypatch):
     monkeypatch.setattr(drill, "tabpfn_model", LevelModel)
-    seed(engine, n=60, levels=("lots", "some", "little"))
+    seed(engine, user_id, n=60, levels=("lots", "some", "little"))
     body = client.get("/api/insights").json()
     assert body["source"] == "tabpfn" and body["rows_used"] == 60
     songs = {s["song_id"]: s for s in body["songs"]}
@@ -95,9 +95,9 @@ def test_unknown_lower_level_while_struggling_is_not_a_try():
     assert (a["suggest"], a["level"]) == ("more", "lots")
 
 
-def test_insights_report_rows_per_level_and_ask_to_try_unseen_levels(client, engine, monkeypatch):
+def test_insights_report_rows_per_level_and_ask_to_try_unseen_levels(client, engine, user_id, monkeypatch):
     monkeypatch.setattr(drill, "tabpfn_model", lambda: LevelModel({"lots": 0.9, "some": 0.9, "little": 0.9}))
-    seed(engine)  # every seeded row is at "some"
+    seed(engine, user_id)  # every seeded row is at "some"
     body = client.get("/api/insights").json()
     assert body["rows_by_level"] == {"lots": 0, "some": 40, "little": 0}
     assert body["help"]["suggest"] == "try"

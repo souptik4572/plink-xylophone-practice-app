@@ -26,14 +26,14 @@ def gemma(monkeypatch, tmp_path):
     return calls, queue
 
 
-def test_find_song_by_loose_title(engine):
+def test_find_song_by_loose_title(engine, user_id):
     from sqlmodel import Session
 
     with Session(engine) as db:
-        assert ask.find_song(db, "jingle bells").id == "jingle-bells"
-        assert ask.find_song(db, "Twinkle").id == "twinkle"
-        assert ask.find_song(db, "mary-had") .id == "mary"
-        assert ask.find_song(db, "Bohemian Rhapsody") is None
+        assert ask.find_song(db, user_id, "jingle bells").id == "jingle-bells"
+        assert ask.find_song(db, user_id, "Twinkle").id == "twinkle"
+        assert ask.find_song(db, user_id, "mary-had") .id == "mary"
+        assert ask.find_song(db, user_id, "Bohemian Rhapsody") is None
 
 
 def test_answers_by_calling_tabpfn_through_a_tool(client, gemma, monkeypatch):
@@ -41,7 +41,7 @@ def test_answers_by_calling_tabpfn_through_a_tool(client, gemma, monkeypatch):
     monkeypatch.setattr(
         ask.drill,
         "insights",
-        lambda db: {
+        lambda db, user_id: {
             "source": "tabpfn",
             "rows_used": 40,
             "known_levels": ["some"],
@@ -100,17 +100,17 @@ def test_question_length_is_limited(client):
     assert client.post("/api/ask", json={"question": "x" * 501}).status_code == 422
 
 
-def test_list_songs_ranks_in_code_so_gemma_only_explains(engine, monkeypatch):
+def test_list_songs_ranks_in_code_so_gemma_only_explains(engine, user_id, monkeypatch):
     from sqlmodel import Session
 
     level = {"twinkle": 0.85, "jingle-bells": 0.87, "mary": 0.83, "hot-cross-buns": 0.74, "happy-birthday": 0.78}
     monkeypatch.setattr(
         ask.drill,
         "insights",
-        lambda db: {"source": "tabpfn", "songs": [{"song_id": k, "by_level": {"lots": v, "some": v, "little": v}} for k, v in level.items()]},
+        lambda db, user_id: {"source": "tabpfn", "songs": [{"song_id": k, "by_level": {"lots": v, "some": v, "little": v}} for k, v in level.items()]},
     )
     with Session(engine) as db:
-        out = ask.tool_list_songs(db)
+        out = ask.tool_list_songs(db, user_id)
     preds = [s["first_try_prediction"] for s in out["songs"]]
     assert preds == sorted(preds, reverse=True)  # easiest first
     assert out["songs"][0]["title"] == "Jingle Bells (chorus)"
