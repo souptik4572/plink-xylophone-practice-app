@@ -17,7 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, delete, func, select, update
 
 from app import config
-from app import ask, auth, coach, drill, summary
+from app import ask, auth, coach, drill, jumps, summary
 from app.auth import UserId
 from app.features import derive_columns, session_stats
 from app.fitter import REFERENCE_MIDI, fit_song, midi_to_name, parse_notes
@@ -386,11 +386,13 @@ def own_session(db: Session, user_id: int, session_id: int) -> PracticeSession:
 
 
 @app.post("/api/sessions")
-def start_session(body: SessionIn, db: SessionDep, user_id: UserId) -> dict[str, Any]:
+def start_session(body: SessionIn, db: SessionDep, user_id: UserId, background: BackgroundTasks) -> dict[str, Any]:
     s = PracticeSession(user_id=user_id, player=body.player)
     db.add(s)
     db.commit()
     db.refresh(s)
+    # Her "Tricky jumps" practice, rebuilt if her weakest jumps changed, ready for the fourth part.
+    background.add_task(jumps.refresh, db.get_bind(), user_id)
     return {"id": s.id, "player": s.player, "started_at": s.started_at.isoformat()}
 
 
@@ -519,20 +521,26 @@ def add_attempts(body: AttemptsIn, db: SessionDep, user_id: UserId, background: 
 
 
 @app.get("/api/next-drill")
-def next_drill(session_id: int, db: SessionDep, user_id: UserId, song_id: str | None = None) -> dict[str, Any]:
+def next_drill(session_id: int, db: SessionDep, user_id: UserId, song_id: str | None = None, final: bool = False) -> dict[str, Any]:
+    """The next part. `final`: the session's last, the one TabPFN expects her surest to get right."""
     own_session(db, user_id, session_id)
     try:
-        p = drill.next_drill(db, user_id, session_id, song_id)
+        p = drill.next_drill(db, user_id, session_id, song_id, final)
     except LookupError as e:
         raise HTTPException(404, "No such song") from e
-    return {
+    out = {
         "song_id": p.song_id,
         "phrase_idx": p.phrase_idx,
         "source": p.source,
         "expected_success": p.expected_success,
         "note_probs": p.note_probs,
         "rows_used": p.rows_used,
+        "reason": p.reason,
     }
+    # A part from another song (her jump practice) comes with that song, which the app may not have yet.
+    if p.song_id != song_id:
+        out["song"] = song_out(db.get(Song, (user_id, p.song_id)), bar_offsets(db, user_id))
+    return out
 
 
 # Mounted last, so every /api route above wins. The app uses #routes, so no fallback page is needed.

@@ -5,7 +5,7 @@ import json
 import logging
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 import pandas as pd
@@ -37,6 +37,8 @@ class Pick:
     # TabPFN's first-try prediction for each note of the chosen part, for per-note help.
     note_probs: list[float] | None = None
     rows_used: int = 0
+    # song: from the song she chose; jumps: practice from her trickiest jumps; finish: the last part.
+    reason: str = "song"
 
 
 # PyTorch's GPU (MPS) backend deadlocked when several threads first used a kernel
@@ -81,7 +83,7 @@ def pick(
     history: pd.DataFrame,
     cands: list[Candidate],
     last: tuple[str, int] | None,
-    model=tabpfn_model,
+    model=None,
     target: float = config.DRILL_TARGET,
 ) -> Pick:
     keys = [(c.song_id, c.phrase_idx) for c in cands]
@@ -92,7 +94,8 @@ def pick(
         return Pick(cands[i].song_id, cands[i].phrase_idx, "fallback", None, rows_used=len(history))
 
     t = time.perf_counter()
-    proba = fit_predict(model, history[FEATURES], history[LABEL].astype(int), pd.concat([c.rows for c in cands], ignore_index=True))
+    # Looked up when called, not when defined, so tests can stand a simpler model in for TabPFN.
+    proba = fit_predict(model or tabpfn_model, history[FEATURES], history[LABEL].astype(int), pd.concat([c.rows for c in cands], ignore_index=True))
     per_note, at = [], 0
     for c in cands:
         per_note.append([float(x) for x in proba[at : at + len(c.rows)]])
@@ -104,7 +107,7 @@ def pick(
     )
 
 
-def weakest_jumps(history: pd.DataFrame, labels: list[str], k: int = 3, model=tabpfn_model) -> list[dict]:
+def weakest_jumps(history: pd.DataFrame, labels: list[str], k: int = 3, model=None) -> list[dict]:
     """The bar-to-bar moves she is least likely to get right first time.
 
     With enough rows, TabPFN predicts each jump she has met as a mid-phrase note;
@@ -119,7 +122,14 @@ def weakest_jumps(history: pd.DataFrame, labels: list[str], k: int = 3, model=ta
     pairs = moves.groupby(["prev_bar", "target_bar"])[LABEL].agg(["sum", "count"]).reset_index()
 
     def named(prev, target, expected, source):
-        return {"from": labels[int(prev)], "to": labels[int(target)], "expected": float(expected), "source": source}
+        return {
+            "from": labels[int(prev)],
+            "to": labels[int(target)],
+            "from_bar": int(prev),
+            "to_bar": int(target),
+            "expected": float(expected),
+            "source": source,
+        }
 
     if cold_start(history):
         seen = pairs[pairs["count"] >= 3].assign(rate=lambda d: (d["sum"] + 1) / (d["count"] + 2))
@@ -139,13 +149,13 @@ def weakest_jumps(history: pd.DataFrame, labels: list[str], k: int = 3, model=ta
         ],
         ignore_index=True,
     )
-    pairs["expected"] = fit_predict(model, history[FEATURES], history[LABEL].astype(int), probe[FEATURES])
+    pairs["expected"] = fit_predict(model or tabpfn_model, history[FEATURES], history[LABEL].astype(int), probe[FEATURES])
     worst = pairs.sort_values(["expected", "prev_bar", "target_bar"]).head(k)
     return [named(r.prev_bar, r.target_bar, r.expected, "tabpfn") for r in worst.itertuples()]
 
 
 _lock = threading.Lock()
-_cache: dict[tuple[int, int, str | None], tuple[int, Pick]] = {}
+_cache: dict[tuple[int, int, str | None, bool], tuple[int, Pick]] = {}
 
 
 # Help levels from most help to least.
@@ -254,7 +264,37 @@ def clear_cache() -> None:
         _insights_cache.clear()
 
 
-def _compute(db: Session, user_id: int, session_id: int, song_id: str | None, last: Attempt | None) -> Pick:
+def _practice_due(db: Session, user_id: int, session_id: int, song_id: str) -> Song | None:
+    """Her "Tricky jumps" practice song, once she has played DRILL_EVERY_PARTS song parts since the last one."""
+    practice = db.exec(select(Song).where(Song.user_id == user_id, Song.source == "drill")).first()
+    if practice is None or practice.id == song_id:
+        return None
+    played = db.exec(
+        select(Attempt.song_id).where(Attempt.session_id == session_id, Attempt.pos_in_phrase == 0).order_by(col(Attempt.id))
+    ).all()
+    since = 0
+    for sid in reversed(played):
+        if sid == practice.id:
+            break
+        since += 1
+    return practice if since >= config.DRILL_EVERY_PARTS else None
+
+
+def _best_this_session(db: Session, session_id: int, cands: list[Candidate]) -> Candidate | None:
+    """Before TabPFN has enough to go on: the part she got most notes right first time on, this session."""
+    rows = db.exec(select(Attempt.song_id, Attempt.phrase_idx, Attempt.first_try_correct).where(Attempt.session_id == session_id)).all()
+    rates: dict[tuple[str, int], list[bool]] = {}
+    for song, phrase, ok in rows:
+        rates.setdefault((song, phrase), []).append(ok)
+    played = [c for c in cands if (c.song_id, c.phrase_idx) in rates]
+    if not played:
+        return None
+    return max(played, key=lambda c: sum(rates[(c.song_id, c.phrase_idx)]) / len(rates[(c.song_id, c.phrase_idx)]))
+
+
+def _compute(
+    db: Session, user_id: int, session_id: int, song_id: str | None, last: Attempt | None, final: bool = False
+) -> Pick:
     offsets = bar_offsets(db, user_id)
     songs = (
         [db.get(Song, (user_id, song_id))]
@@ -263,6 +303,10 @@ def _compute(db: Session, user_id: int, session_id: int, song_id: str | None, la
     )
     if not songs or songs[0] is None:
         raise LookupError(song_id)
+    reason = "finish" if final else "song"
+    practice = _practice_due(db, user_id, session_id, song_id) if song_id and not final else None
+    if practice:
+        songs, reason = [practice], "jumps"
 
     plays = {
         (s, p): n
@@ -287,24 +331,28 @@ def _compute(db: Session, user_id: int, session_id: int, song_id: str | None, la
 
     child = db.exec(select(Attempt).where(Attempt.user_id == user_id, Attempt.player == "child")).all()
     history = frame([r.model_dump(include={*FEATURES, LABEL}) for r in child])
-    result = pick(history, cands, (last.song_id, last.phrase_idx) if last else None, target=prefs.drill_target)
+    if final and cold_start(history) and (best := _best_this_session(db, session_id, cands)):
+        return Pick(best.song_id, best.phrase_idx, "fallback", None, rows_used=len(history), reason=reason)
+    # The last part is the one she is surest to get right: a session ends on a win, not a stretch.
+    target = 1.0 if final else prefs.drill_target
+    result = replace(pick(history, cands, (last.song_id, last.phrase_idx) if last else None, target=target), reason=reason)
     if result.source == "tabpfn":
-        log.info("TabPFN picked %s #%d (p=%.2f) in %.2fs on %d rows", result.song_id, result.phrase_idx, result.expected_success, result.seconds, len(history))
+        log.info("TabPFN picked %s #%d (p=%.2f, %s) in %.2fs on %d rows", result.song_id, result.phrase_idx, result.expected_success, reason, result.seconds, len(history))
     return result
 
 
-def next_drill(db: Session, user_id: int, session_id: int, song_id: str | None) -> Pick:
+def next_drill(db: Session, user_id: int, session_id: int, song_id: str | None, final: bool = False) -> Pick:
     """Cached per session and latest attempt, so the background refresh usually answers it."""
     with _lock:
         last = db.exec(
             select(Attempt).where(Attempt.session_id == session_id).order_by(col(Attempt.id).desc()).limit(1)
         ).first()
-        key = (user_id, session_id, song_id)
+        key = (user_id, session_id, song_id, final)
         stamp = last.id if last else 0
         hit = _cache.get(key)
         if hit and hit[0] == stamp:
             return hit[1]
-        result = _compute(db, user_id, session_id, song_id, last)
+        result = _compute(db, user_id, session_id, song_id, last, final)
         _cache[key] = (stamp, result)
         return result
 

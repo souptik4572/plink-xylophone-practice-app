@@ -37,25 +37,44 @@ def ollama(monkeypatch, tmp_path):
 
 
 
-def p(s, e):
-    return {"start": s, "end": e, "nickname": "Hop", "tip": "Go slow."}
+def g(size, nickname="Hop"):
+    """A phrase as Gemma gives it: how many notes, a name and a tip."""
+    return {"notes": size, "nickname": nickname, "tip": "Go slow."}
 
 
-GOOD = [p(0, 3), p(4, 6), p(7, 10), p(11, 13)]
+def placed(s, e, nickname="Hop"):
+    """A phrase as code places it."""
+    return {"start": s, "end": e, "nickname": nickname, "tip": "Go slow."}
 
 
-def test_valid_lesson_passes():
-    assert coach.validate_lesson({"phrases": GOOD}, 14) == GOOD
+GEMMA = [g(4), g(3), g(4), g(3)]
+GOOD = [placed(0, 3), placed(4, 6), placed(7, 10), placed(11, 13)]
+
+
+def test_valid_lesson_is_placed_by_code():
+    assert coach.validate_lesson({"phrases": GEMMA}, 14) == GOOD
+
+
+def test_miscounts_still_cover_every_note():
+    # Short by one, long by one, or a whole phrase too many: the last phrase ends with the song.
+    assert coach.validate_lesson({"phrases": [g(4), g(3), g(4), g(2)]}, 14) == GOOD
+    assert coach.validate_lesson({"phrases": [g(4), g(3), g(4), g(4)]}, 14) == GOOD
+    assert coach.validate_lesson({"phrases": [*GEMMA, g(4, "Extra")]}, 14) == GOOD
+
+
+def test_a_short_phrase_between_full_ones_is_shared_out():
+    # 6 + 2 + 6: the 2 can't join either neighbour within 6 notes, so it pairs up and splits evenly.
+    out = coach.validate_lesson({"phrases": [g(6, "A"), g(2, "B"), g(6, "C")]}, 14)
+    assert [(x["start"], x["end"], x["nickname"]) for x in out] == [(0, 3, "A"), (4, 7, "B"), (8, 13, "C")]
 
 
 @pytest.mark.parametrize(
     "phrases, why",
     [
-        ([p(0, 3), p(5, 8), p(9, 13)], "gap"),
-        ([p(0, 3), p(3, 6), p(7, 10), p(11, 13)], "overlap"),
-        ([p(0, 3), p(4, 6), p(7, 10), p(11, 12)], "misses the last note"),
-        ([p(1, 3), p(4, 6), p(7, 10), p(11, 13)], "misses the first note"),
-        ([*GOOD[:3], {**GOOD[3], "nickname": ""}], "empty nickname"),
+        ([g(4), g(0), g(4), g(6)], "an empty phrase"),
+        ([g(4), g(-1), g(4), g(6)], "a negative count"),
+        ([*GEMMA[:3], {**GEMMA[3], "nickname": ""}], "empty nickname"),
+        ([*GEMMA[:3], {**GEMMA[3], "tip": "x" * 121}], "tip too long"),
         ([], "no phrases"),
     ],
 )
@@ -67,7 +86,7 @@ def test_invalid_lessons_are_rejected(phrases, why):
 
 def test_lesson_from_gemma_is_used_when_valid(ollama):
     calls, queue = ollama
-    queue.append(reply({"phrases": GOOD}))
+    queue.append(reply({"phrases": GEMMA}))
     lesson = coach.build_lesson(TWINKLE_BARS, TWINKLE_BEATS, LABELS)
     assert lesson.source == "gemma"
     assert lesson.phrases == GOOD
@@ -78,32 +97,53 @@ def test_lesson_from_gemma_is_used_when_valid(ollama):
     assert "6:G (2 beats)" in prompt  # long notes are shown: they end phrases
 
 
-def test_lesson_falls_back_on_invalid_output(ollama):
-    _, queue = ollama
-    queue.append(reply({"phrases": [p(0, 1)]}))
+def test_lesson_falls_back_when_the_repair_breaks_the_rules_too(ollama):
+    calls, queue = ollama
+    queue += [reply({"phrases": [g(4), g(3), g(4), g(1, "")]})] * 2
     lesson = coach.build_lesson(TWINKLE_BARS, TWINKLE_BEATS, LABELS)
     assert lesson.source == "fallback"
     assert lesson.phrases == coach.fallback_phrases(14)
     assert "ValueError" in lesson.error
+    assert len(calls) == 1 + coach.config.GEMMA_REPAIRS
 
 
 def test_lesson_falls_back_on_unparseable_json(ollama):
     _, queue = ollama
-    queue.append(reply("not json"))
+    queue += [reply("not json")] * 2
     assert coach.build_lesson(TWINKLE_BARS, TWINKLE_BEATS, LABELS).source == "fallback"
 
 
-def test_lesson_falls_back_on_timeout(ollama):
+def test_a_broken_lesson_goes_back_once_with_the_complaint(ollama):
+    calls, queue = ollama
+    queue += [reply({"phrases": [g(4), g(3), g(4, ""), g(3)]}), reply({"phrases": GEMMA})]
+    lesson = coach.build_lesson(TWINKLE_BARS, TWINKLE_BEATS, LABELS)
+    assert lesson.source == "gemma" and lesson.phrases == GOOD
+    retry = calls[1]["messages"]
+    assert retry[:2] == calls[0]["messages"]  # the original request, unchanged
+    assert retry[2]["role"] == "assistant" and '"nickname": ""' in retry[2]["content"]  # what Gemma said
+    assert retry[3]["role"] == "user" and "phrase 3 has no nickname" in retry[3]["content"]
+    logged = [json.loads(x)["job"] for x in coach.config.GEMMA_LOG.read_text().splitlines()]
+    assert logged == ["lesson", "lesson_repair"]
+
+
+def test_stray_text_around_the_json_is_repaired_too(ollama):
     _, queue = ollama
+    queue += [reply('{"lines": ["Yay!"]}\n```'), reply({"lines": [f"Great job {i}!" for i in range(12)]})]
+    assert coach.praise_lines(name="", language="English").source == "gemma"
+
+
+def test_lesson_falls_back_on_timeout_without_asking_again(ollama):
+    calls, queue = ollama
     queue.append(httpx.ReadTimeout("slow"))
     lesson = coach.build_lesson(TWINKLE_BARS, TWINKLE_BEATS, LABELS)
     assert lesson.source == "fallback"
+    assert len(calls) == 1
     assert "Timeout" in lesson.error
 
 
 def test_every_call_is_logged_with_time_and_tokens(ollama):
     _, queue = ollama
-    queue.append(reply({"phrases": GOOD}, seconds=2.5))
+    queue.append(reply({"phrases": GEMMA}, seconds=2.5))
     coach.build_lesson(TWINKLE_BARS, TWINKLE_BEATS, LABELS)
     entry = json.loads(coach.config.GEMMA_LOG.read_text().splitlines()[-1])
     assert entry["job"] == "lesson" and entry["ok"] is True
@@ -127,7 +167,7 @@ def test_parent_note_from_gemma(ollama):
 
 def test_parent_note_falls_back_to_a_template(ollama):
     _, queue = ollama
-    queue.append(reply({"note": ""}))
+    queue += [reply({"note": ""})] * 2
     note = coach.parent_note(STATS, WEAK, name="Mira", language="English")
     assert note.source == "fallback"
     assert "28" in note.text and "79%" in note.text and "C to G" in note.text
@@ -150,23 +190,23 @@ def test_praise_lines_are_cleaned(ollama):
 
 def test_too_few_praise_lines_fall_back(ollama):
     _, queue = ollama
-    queue.append(reply({"lines": ["Yay!"]}))
+    queue += [reply({"lines": ["Yay!"]})] * 2
     assert coach.praise_lines(name="", language="English").lines == coach.DEFAULT_PRAISE
 
 
 def test_oversized_phrase_is_split_keeping_gemma_names():
-    out = coach.validate_lesson({"phrases": [p(0, 3), {**p(4, 13), "nickname": "Long Slide"}]}, 14)
+    out = coach.validate_lesson({"phrases": [g(4), g(10, "Long Slide")]}, 14)
     assert [(x["start"], x["end"]) for x in out] == [(0, 3), (4, 8), (9, 13)]
     assert [x["nickname"] for x in out] == ["Hop", "Long Slide", "Long Slide 2"]
 
 
 def test_undersized_phrase_is_merged_into_its_neighbour():
-    out = coach.validate_lesson({"phrases": [p(0, 3), p(4, 5), p(6, 9), p(10, 13)]}, 14)
+    out = coach.validate_lesson({"phrases": [g(4), g(2), g(4), g(4)]}, 14)
     assert [(x["start"], x["end"]) for x in out] == [(0, 5), (6, 9), (10, 13)]
 
 
 def test_undersized_first_phrase_merges_forward():
-    out = coach.validate_lesson({"phrases": [p(0, 1), p(2, 5), p(6, 9), p(10, 13)]}, 14)
+    out = coach.validate_lesson({"phrases": [g(2), g(4), g(4), g(4)]}, 14)
     assert [(x["start"], x["end"]) for x in out] == [(0, 5), (6, 9), (10, 13)]
 
 

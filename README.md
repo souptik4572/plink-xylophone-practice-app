@@ -33,6 +33,7 @@ A grown-up signs up with an email and a password (8 characters or more), on the 
    - 🌿 *Some help*: glow and spoken hints when she's stuck.
    - 🌳 *Little help*: she plays from memory, and the glow appears only if she needs it.
 4. Every note right first time is a **star**; every 15 stars unlock a **sticker** in her book on Home.
+5. After every three parts of her song, Plink slips in a short part on a jump she finds hard. The last part of a session is the one she's most likely to get right ("Last one!").
 
 The Grown-ups area asks for a sum before opening, so little hands can't reach settings or "delete all data".
 
@@ -40,13 +41,15 @@ The Grown-ups area asks for a sum before opening, so little hands can't reach se
 
 - **TabPFN** (Prior Labs), learning from her own practice log from about 20 notes in:
   - chooses the next part at the level she'll get right about 80% of the time;
+  - ends every session on the part she's surest of;
   - brings help sooner on the notes it expects her to miss;
   - advises more, less, or "try" a help level, but only for levels it has seen her play;
   - rates every song for her;
-  - finds her trickiest jumps.
+  - finds her trickiest jumps, and practice on them comes after every three song parts.
 - **Gemma 4** (`gemma4:e4b` through Ollama on the laptop; `gemma-4-26b-a4b-it` on the Gemini API in the public demo):
   - splits songs into named parts;
-  - writes praise and the note for you;
+  - writes praise, the note for you, and what Plink says before each jump practice part;
+  - fixes its own answer: when a reply breaks a rule (a lesson skipping a note, a wrong colour), the complaint goes back to it once before the app falls back to fixed text;
   - **reads song cards from a photo**, using its vision locally;
   - answers **Ask Plink** questions by calling tools over her data and TabPFN.
 - **Basic Pitch** (Spotify) turns singing into notes, in the browser.

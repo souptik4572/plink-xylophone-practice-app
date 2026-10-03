@@ -318,3 +318,43 @@ The user reported the mic calibration "registering unwanted noise and faulty seq
 - Still open: **the real instrument.** Every number above is synthetic. Her xylophone's own overtones, the room and the laptop mic decide the real result, so the 36/40 Mic check on her xylophone (the milestone 2 gate) is still to do.
 
 Tests: 205 pytest, 114 vitest. **Not committed.**
+
+## Gemma fixes its replies, sessions end on a win, tricky-jump practice (Sat 3 Oct)
+
+Asked for more AI ideas, the user picked three of four: "Let us target #1, #2 and #3; we can simply skip the rest". The fourth (a photo of the xylophone) is skipped.
+
+**1. Gemma repairs its own replies.** A reply that fails its check goes back to Gemma once (`GEMMA_REPAIRS`), with the complaint, before the fixed fallback. This covers lessons, praise, the parent note, both steps of reading a song card, and the practice lines below. Timeouts and connection errors are not retried.
+- The complaints say how to fix it: "notes 15-16 make a phrase of 2 notes; every phrase needs 3 to 6 notes, so move the boundaries around it".
+- Lessons now ask for each phrase's size in notes, and code places the phrases. With start and end positions, most bad lessons were arithmetic slips ("phrase 4 starts at note 2, but it must start at note 21").
+- Phrases past the last note are dropped, and a short phrase stuck between two full ones is shared with its smaller neighbour (2 + 6 → 4 + 4).
+- Lessons for the 5 built-in songs on the Gemini API (26B-A4B):
+
+  | | Runs | Answered in time | Valid first try | Repairs that worked | Valid |
+  | --- | --- | --- | --- | --- | --- |
+  | Start/end positions + repair | 10 | 10 | 6 | 1 of 4 | 7 |
+  | + complaints that say how to fix it | 20 | 19 | 13 | 1 of 6 | 14 |
+  | Phrase sizes, placed by code | 20 | 12 | 11 | 1 of 1 | 12 |
+
+  Every lesson that came back in time is now valid. The laptop's e4b: 5/5 valid, median 12.6 s.
+- Broke:
+  - Repair alone did little: it fixed 2 of 10 bad lessons; the rest repeated the slip or made a new one. Changing what Gemma is asked for worked better than asking twice.
+  - The first sizes version lost a lesson on the laptop: e4b listed phrases past the last note. Those are now dropped.
+  - **8 of the last 20 lesson calls hit the 60 s timeout**, run back to back on the API. A timed-out lesson isn't saved: the song plays in plain four-note parts, and "Make lesson" on Songs asks again.
+
+**2. Every session ends on a win.** When the next part probably won't fit in the time left (less than the last part took), it becomes the last: Plink says "Last one!" and plays the part TabPFN expects her to get right most surely (aiming at 100% instead of 80%). Before TabPFN knows her, it's the part she played best this session. The chip reads "TabPFN's surest part, to finish on".
+- Broke: the first version asked for the last part 60 s before the end, and a 2-minute session ended after about 70 s. Timing it by the parts themselves fixed it.
+
+**3. Practice from her trickiest jumps.** As a session starts, off her path, TabPFN's two weakest jumps become a "Tricky jumps" song with three short parts per jump, easiest first: "Stepping stones" (through the bar in between; big jumps only), "One big hop" (each bar twice) and "Hop and back" (there and back, twice). Each ends on a long note. After every three parts of her song, the drill picker slots in the practice part nearest her 80% sweet spot. The song is rebuilt only when her weakest jumps change. Songs lists it as "Practice", without the lesson button, since a lesson would cut across its parts.
+- Gemma writes the line Plink says before each part, naming the jump's colours: "Go orange and turquoise back and forth, yay!". A line naming a colour the part doesn't use goes back for repair, since she finds her bars by colour.
+- Broke: Gemma first named the parts too. On the API its names for six near-identical parts were junk in half the runs ("nickname-2", "=", "pattern-pattern", escaped quotes, blanks), and repairs fixed none. Parts are now named by kind, which is also easier for her to learn:
+
+  | 12 runs on the API | Names and lines | Lines only |
+  | --- | --- | --- |
+  | Usable | 6 (some names still junk) | 11: 9 first try, 2 repaired; 1 API timeout |
+
+  A set of six lines takes about 4 s. The laptop's e4b wrote usable lines 5/5; its one repair was turquoise called "blue".
+- Tests no longer write to `backend/logs/gemma.jsonl`; the test fixture points the log at a temp file.
+
+- Verified: headless Chrome played a whole 2-minute session on a seeded demo account against a separate server, tapping each glowing bar. Practice parts came 4th, 8th and 12th, each with Gemma's line. Part 14, starting at the 2-minute mark, was "Last one!": TabPFN's surest part at a 94% first-try chance (its usual picks were 88-92%), and it ended the session.
+
+Tests: 215 pytest, 114 vitest. **Not committed.**

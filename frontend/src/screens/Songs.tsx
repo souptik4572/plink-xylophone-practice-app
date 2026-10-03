@@ -9,7 +9,7 @@ import { Deco } from '../ui/Deco'
 import { Button, Chip, ScreenTitle } from '../ui/ui'
 import { AddSong } from './AddSong'
 
-const SOURCE = { builtin: 'Built-in', played: 'Played in', hummed: 'Sung', typed: 'Typed', photo: 'From a photo' } as Record<string, string>
+const SOURCE = { builtin: 'Built-in', played: 'Played in', hummed: 'Sung', typed: 'Typed', photo: 'From a photo', drill: 'Practice' } as Record<string, string>
 
 export function Songs({ adding }: { adding: boolean }) {
   const { instrument, navigate, serverUp, settings } = useApp()
@@ -83,7 +83,7 @@ export function Songs({ adding }: { adding: boolean }) {
                 <span className="faint">
                   {s.bars.length} notes · {s.phrases.length || '–'} parts
                 </span>
-                {s.lesson === 'gemma' ? (
+                {s.source === 'drill' ? null : s.lesson === 'gemma' ? (
                   <Chip t={4} solid icon={<Sparkles aria-hidden />}>
                     Gemma lesson
                   </Chip>
@@ -120,7 +120,8 @@ export function Songs({ adding }: { adding: boolean }) {
                 <Button variant="secondary" size="sm" t={i + 1} icon={<Headphones aria-hidden size={18} />} onClick={() => navigate(`/free/${s.id}`)}>
                   Listen
                 </Button>
-                {!offline && (
+                {/* Practice parts are built from her jumps; a lesson would cut across them. */}
+                {!offline && s.source !== 'drill' && (
                   <Button
                     variant="ghost"
                     size="sm"

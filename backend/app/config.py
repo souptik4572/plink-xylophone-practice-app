@@ -27,6 +27,9 @@ GEMMA_VISION_TIMEOUT_S = float(os.getenv("GEMMA_VISION_TIMEOUT_S", "150"))
 CARD_MAX_BYTES = 8 * 1024 * 1024
 # Gemma 4 thinks before answering by default: 44 s for a lesson vs 10 s without.
 GEMMA_THINK = os.getenv("GEMMA_THINK", "false").lower() in ("1", "true", "yes")
+# A reply that breaks the rules (a lesson skipping a note, a stray markdown fence) goes
+# back once with the validator's complaint before the fixed fallback is used.
+GEMMA_REPAIRS = 1
 GEMMA_LOG = ROOT / "backend" / "logs" / "gemma.jsonl"
 
 # The family: used in praise lines and the parent note.
@@ -47,6 +50,11 @@ HELP_MORE_MARGIN = 0.2
 HELP_MIN_ROWS = 8
 
 SESSION_MINUTES = float(os.getenv("SESSION_MINUTES", "5"))
+
+# Practice from her trickiest jumps: parts built on her JUMP_DRILLS weakest jumps, one
+# slotted in after every DRILL_EVERY_PARTS parts of the song she chose.
+JUMP_DRILLS = 2
+DRILL_EVERY_PARTS = 3
 
 # Lesson phrases (spec 7.10)
 PHRASE_MIN_NOTES = 3

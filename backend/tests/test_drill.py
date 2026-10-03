@@ -140,7 +140,7 @@ def test_weakest_jumps_at_cold_start_use_observed_miss_rates():
     for ok in [True, True, True]:
         rows.append({**history(1).iloc[0].to_dict(), "prev_bar": 1.0, "target_bar": 2, "first_try_correct": ok})
     weak = weakest_jumps(pd.DataFrame(rows), LABELS, k=1, model=JumpModel)
-    assert weak == [{"from": "C", "to": "G", "expected": pytest.approx(2 / 5), "source": "observed"}]
+    assert weak == [{"from": "C", "to": "G", "from_bar": 0, "to_bar": 4, "expected": pytest.approx(2 / 5), "source": "observed"}]
 
 
 def test_no_jumps_yet():

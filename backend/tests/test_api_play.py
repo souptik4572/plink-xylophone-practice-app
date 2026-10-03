@@ -99,6 +99,7 @@ def test_next_drill_cold_start_walks_the_song_in_order(client):
         "expected_success": None,
         "note_probs": None,
         "rows_used": 0,
+        "reason": "song",
     }
     client.post("/api/attempts", json={"rows": phrase0(sid)})
     assert client.get(f"/api/next-drill?session_id={sid}&song_id=twinkle").json()["phrase_idx"] == 1

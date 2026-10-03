@@ -7,6 +7,7 @@ validated; on invalid output or a timeout the caller gets a fixed fallback.
 import base64
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -74,31 +75,53 @@ def _ask(
     think: bool | None = None,
     temperature: float = 0.3,
 ):
-    """One structured call. Returns (validated value or None, error, seconds)."""
+    """One structured call. Returns (validated value or None, error, seconds).
+
+    A reply that arrives but breaks the rules goes back to Gemma with the
+    validator's complaint, up to GEMMA_REPAIRS times, before the caller falls
+    back. A timeout or a dead server is not retried: that would only wait twice.
+    """
     user: dict = {"role": "user", "content": prompt}
     if images:
         user["images"] = images
-    body = {
-        "model": config.GEMMA_MODEL,
-        "stream": False,
-        "think": config.GEMMA_THINK if think is None else think,
-        "format": schema,
-        "options": {"temperature": temperature},
-        "messages": [{"role": "system", "content": system}, user],
-    }
+    messages: list[dict] = [{"role": "system", "content": system}, user]
     t = time.perf_counter()
-    reply = None
-    try:
-        reply = _post(body, timeout)
-        value = validate(json.loads(reply["message"]["content"]))
-    except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
-        seconds = time.perf_counter() - t
-        error = f"{type(e).__name__}: {e}"
-        _log(job, False, seconds, reply, error)
-        return None, error, seconds
-    seconds = time.perf_counter() - t
-    _log(job, True, seconds, reply)
-    return value, "", seconds
+    for attempt in range(config.GEMMA_REPAIRS + 1):
+        name = f"{job}_repair" if attempt else job
+        body = {
+            "model": config.GEMMA_MODEL,
+            "stream": False,
+            "think": config.GEMMA_THINK if think is None else think,
+            "format": schema,
+            "options": {"temperature": temperature},
+            "messages": messages,
+        }
+        started = time.perf_counter()
+        reply = None
+        try:
+            reply = _post(body, timeout)
+            value = validate(json.loads(reply["message"]["content"]))
+        except httpx.HTTPError as e:
+            error = f"{type(e).__name__}: {e}"
+            _log(name, False, time.perf_counter() - started, reply, error)
+            break
+        except (ValueError, KeyError, TypeError) as e:
+            error = f"{type(e).__name__}: {e}"
+            _log(name, False, time.perf_counter() - started, reply, error)
+            said = (reply or {}).get("message")
+            if not said:
+                break
+            messages = [*messages, {**said, "role": "assistant"}, {"role": "user", "content": REPAIR.format(problem=e)}]
+            continue
+        _log(name, True, time.perf_counter() - started, reply)
+        return value, "", time.perf_counter() - t
+    return None, error, time.perf_counter() - t
+
+
+REPAIR = (
+    "That answer can't be used: {problem}. Reply again with only the corrected JSON, "
+    "nothing before or after it, keeping every rule in the first message."
+)
 
 
 LESSON_SCHEMA = {
@@ -109,12 +132,11 @@ LESSON_SCHEMA = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "start": {"type": "integer"},
-                    "end": {"type": "integer"},
+                    "notes": {"type": "integer"},
                     "nickname": {"type": "string"},
                     "tip": {"type": "string"},
                 },
-                "required": ["start", "end", "nickname", "tip"],
+                "required": ["notes", "nickname", "tip"],
             },
         }
     },
@@ -139,33 +161,65 @@ def _resize(phrases: list[dict]) -> list[dict]:
             out[-1] = {**out[-1], "end": ph["end"]}
         else:
             out.append(ph)
+    # A short phrase between two full ones can't merge without passing 6 notes: join it to
+    # the smaller neighbour and split the pair evenly (2 + 6 becomes 4 + 4).
+    i = 0
+    while len(out) > 1 and i < len(out):
+        if size(out[i]) >= lo:
+            i += 1
+            continue
+        j = i - 1 if i == len(out) - 1 or (i > 0 and size(out[i - 1]) <= size(out[i + 1])) else i + 1
+        a, b = min(i, j), max(i, j)
+        half = (out[b]["end"] - out[a]["start"] + 2) // 2
+        out[a : b + 1] = [{**out[a], "end": out[a]["start"] + half - 1}, {**out[b], "start": out[a]["start"] + half}]
+        i = a
     return out
 
 
 def validate_lesson(obj: dict, n: int) -> list[dict]:
-    """Phrases are contiguous, cover every note, and hold 3–6 notes each."""
+    """Gemma's phrase sizes, placed by code: contiguous by construction, covering
+    every note (the last phrase ends at the last note), 3–6 notes each.
+
+    Gemma used to give start and end indices and kept getting them wrong on long
+    songs (off by one, or numbering restarted midway), so it now only says how
+    many notes each phrase holds; a miscount is absorbed by the last phrase. What
+    is left to reject (a name, a tip, a count below one) says exactly what to
+    change: it is what Gemma reads when its reply goes back for repair.
+    """
     phrases = obj["phrases"]
     if not phrases:
-        raise ValueError("no phrases")
-    expect = 0
+        raise ValueError("there are no phrases")
+    start = 0
     clean = []
-    for ph in phrases:
-        start, end = int(ph["start"]), int(ph["end"])
-        if start != expect or end < start:
-            raise ValueError(f"phrase {start}-{end} does not follow on from {expect - 1}")
+    for k, ph in enumerate(phrases, 1):
+        # Counted past the song's end: the remaining phrases have no notes left to hold.
+        if start >= n:
+            break
+        size = int(ph["notes"])
+        if size < 1:
+            raise ValueError(f"phrase {k} holds {size} notes; every phrase needs {config.PHRASE_MIN_NOTES} to {config.PHRASE_MAX_NOTES}")
+        end = min(start + size - 1, n - 1)
         nickname, tip = str(ph["nickname"]).strip(), str(ph["tip"]).strip()
-        if not nickname or len(nickname) > 40 or len(tip) > 120:
-            raise ValueError(f"bad nickname or tip at {start}")
+        if not nickname:
+            raise ValueError(f"phrase {k} has no nickname")
+        if len(nickname) > 40:
+            raise ValueError(f"phrase {k}'s nickname is {len(nickname)} characters long; use at most 4 words")
+        if len(tip) > 120:
+            raise ValueError(f"phrase {k}'s tip is {len(tip)} characters long; use at most 12 words")
         clean.append({"start": start, "end": end, "nickname": nickname, "tip": tip})
-        expect = end + 1
-    if expect != n:
-        raise ValueError(f"phrases end at {expect - 1}, song has {n} notes")
+        start = end + 1
+    # The last phrase ends with the song, so counts a few notes short still cover every note.
+    clean[-1]["end"] = n - 1
     if n < config.PHRASE_MIN_NOTES:
         return clean
     out = _resize(clean)
     bad = [ph for ph in out if not config.PHRASE_MIN_NOTES <= ph["end"] - ph["start"] + 1 <= config.PHRASE_MAX_NOTES]
     if bad:
-        raise ValueError(f"phrase {bad[0]['start']}-{bad[0]['end']} cannot be resized to 3–6 notes")
+        a, b = bad[0]["start"], bad[0]["end"]
+        raise ValueError(
+            f"notes {a}-{b} make a phrase of {b - a + 1} notes; every phrase needs {config.PHRASE_MIN_NOTES} to "
+            f"{config.PHRASE_MAX_NOTES} notes, so move the boundaries around it"
+        )
     return out
 
 
@@ -188,9 +242,9 @@ def build_lesson(bars: list[int], beats: list[float], labels: list[str], lyric: 
         f"Notes: {notes}\n"
         + (f"Lyric: {lyric}\n" if lyric else "")
         + f"Split it into phrases of {config.PHRASE_MIN_NOTES} to {config.PHRASE_MAX_NOTES} notes where a singer "
-        "would breathe; a long note usually ends a phrase. Phrases must be contiguous and cover every note, "
-        f"from 0 to {n - 1}; 'end' is inclusive. Give each phrase a short, playful nickname a small child would "
-        "enjoy (at most 4 words), and a tip for the parent sitting beside her (at most 12 words)."
+        "would breathe; a long note usually ends a phrase. List the phrases in order, giving how many notes each "
+        f"one holds; together they cover all {n} notes. Give each phrase a short, playful nickname a small child "
+        "would enjoy (at most 4 words), and a tip for the parent sitting beside her (at most 12 words)."
     )
     system = "You are a gentle music teacher for very young children. You answer only with the requested JSON."
     phrases, error, seconds = _ask(
@@ -294,6 +348,69 @@ def praise_lines(name: str, language: str) -> Praise:
     if lines is None:
         return Praise(DEFAULT_PRAISE, "fallback", seconds, error)
     return Praise(lines, "gemma", seconds)
+
+
+JUMP_LINES_SCHEMA = {
+    "type": "object",
+    "properties": {"lines": {"type": "array", "items": {"type": "string"}}},
+    "required": ["lines"],
+}
+
+# How each kind of practice part works the jump, easiest first (see app/jumps.py), and its
+# name. Gemma's own names for six near-identical parts were junk half the time ("nickname-2",
+# "=", "pattern-pattern"); one name per kind is also easier for her to learn.
+JUMP_KINDS = {
+    "steps": ("via a stepping stone in between", "Stepping stones"),
+    "once": ("once, playing each bar twice", "One big hop"),
+    "twice": ("there and back, twice", "Hop and back"),
+}
+
+
+@dataclass
+class JumpNames:
+    parts: list[dict]
+    source: str
+    seconds: float = 0.0
+    error: str = ""
+
+
+def _validate_jump_lines(obj: dict, parts: list[dict]) -> list[str]:
+    if len(obj["lines"]) != len(parts):
+        raise ValueError(f"there are {len(obj['lines'])} lines in the answer, but {len(parts)} practice parts")
+    out = []
+    for k, (line, part) in enumerate(zip(obj["lines"], parts), 1):
+        line = " ".join(str(line).split())
+        if not any(c.isalpha() for c in line) or len(line) > 80:
+            raise ValueError(f'line {k}, "{line}", must be a short sentence of at most 10 words')
+        # She finds the bars by colour, so a wrong colour sends her to the wrong bar.
+        named = set(re.findall(r"[a-z]+", line.lower())) & set(config.DEFAULT_COLOURS.values())
+        if wrong := sorted(named - set(part["colours"])):
+            raise ValueError(f"line {k} names {' and '.join(wrong)}, but that part's bars are {', '.join(dict.fromkeys(part['colours']))}")
+        out.append(line)
+    return out
+
+
+def name_jump_parts(parts: list[dict], language: str) -> JumpNames:
+    """Each practice part's name, and the line Gemma writes for Plink to say before it.
+    `parts` are {"kind": steps|once|twice, "colours": [bar colour per note]}."""
+    listed = "\n".join(
+        f"{k}. {', '.join(p['colours'])}: the jump from {p['colours'][0]} to {p['colours'][-1]}, {JUMP_KINDS[p['kind']][0]}"
+        for k, p in enumerate(parts, 1)
+    )
+    prompt = (
+        f"These {len(parts)} short practice parts are for a young child on a toy xylophone. Each one practises a "
+        f"jump between two bars she finds hard; bars are named by their colour.\n{listed}\n"
+        f"For each part, in order, write one cheerful line in {language} for the game to say aloud before it, "
+        "naming the two colours of the jump (at most 10 words)."
+    )
+    system = "You write cheerful, simple words for very young children. You answer only with the requested JSON."
+    lines, error, seconds = _ask(
+        "jump_lines", system, prompt, JUMP_LINES_SCHEMA, lambda o: _validate_jump_lines(o, parts), temperature=0.7
+    )
+    source = "fallback" if lines is None else "gemma"
+    if lines is None:
+        lines = [f"{p['colours'][0].capitalize()} to {p['colours'][-1]}!" for p in parts]
+    return JumpNames([{"nickname": JUMP_KINDS[p["kind"]][1], "tip": line} for p, line in zip(parts, lines)], source, seconds, error)
 
 
 COLOUR_WORDS = {

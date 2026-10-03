@@ -149,10 +149,15 @@ export interface Drill {
   expected_success: number | null
   note_probs: number[] | null
   rows_used: number
+  /** song: from the chosen song; jumps: practice from her trickiest jumps; finish: the session's last part. */
+  reason: 'song' | 'jumps' | 'finish'
+  /** Sent with a part from another song (her jump practice), which the app may not have loaded. */
+  song?: ApiSong
 }
 
-export const nextDrill = (sessionId: number, songId: string) =>
-  call<Drill>(`/api/next-drill?session_id=${sessionId}&song_id=${encodeURIComponent(songId)}`)
+/** The next part; `final` asks for the session's last, the one she is surest to get right. */
+export const nextDrill = (sessionId: number, songId: string, final = false) =>
+  call<Drill>(`/api/next-drill?session_id=${sessionId}&song_id=${encodeURIComponent(songId)}${final ? '&final=true' : ''}`)
 
 export interface NewSong {
   title: string

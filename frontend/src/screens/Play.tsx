@@ -43,6 +43,19 @@ interface Turn {
   song: ApiSong
   phraseIdx: number
   phrase: Phrase
+  reason: Drill['reason']
+}
+
+/** What the grown-up sees under the stage: who chose this part, and why. */
+function drillNote(d: Drill, tricky: number): string {
+  if (d.source !== 'tabpfn') {
+    if (d.reason === 'finish') return 'Her best part this session, to finish on'
+    if (d.reason === 'jumps') return 'Practice for one of her trickiest jumps'
+    return `In song order · TabPFN is still learning (${d.rows_used} notes so far)`
+  }
+  const why = d.reason === 'finish' ? 'TabPFN’s surest part, to finish on' : d.reason === 'jumps' ? 'TabPFN’s practice for a tricky jump' : 'TabPFN pick'
+  const help = tricky ? ` · help comes sooner on ${tricky} tricky ${tricky === 1 ? 'note' : 'notes'}` : ''
+  return `${why} · learned from ${d.rows_used} notes · ${Math.round((d.expected_success ?? 0) * 100)}% first-try chance${help}`
 }
 
 
@@ -84,7 +97,18 @@ export function Play({ songId: initialSong, autostart }: { songId?: string; auto
   /** Rows not yet saved; the parent note waits for them. */
   const pendingSave = useRef<Promise<unknown>>(Promise.resolve())
 
-  const session = useRef<{ id: number; start: number; minutes: number; starsBefore: number | null; tester: boolean } | null>(null)
+  const session = useRef<{
+    id: number
+    start: number
+    minutes: number
+    starsBefore: number | null
+    tester: boolean
+    /** The last part has been given out: the session ends when it is done. */
+    finalPart: boolean
+    /** When the current part began, and how long the one before took: does another fit? */
+    partStart: number
+    lastPartMs: number
+  } | null>(null)
   const run = useRef<PhraseRun | null>(null)
   const replaying = useRef(false)
   /** False between a right strike and the next target, so a strike there is not scored. */
@@ -207,9 +231,20 @@ export function Play({ songId: initialSong, autostart }: { songId?: string; auto
     setTurnPhase('demo')
     setMood('listen')
     setBubble('Listen…')
-    if (first) {
-      say(name ? `Hi ${name}! Listen first.` : 'Listen first!')
-      await sleep(1100)
+    // Before the demonstration: a hello, "Last one!", or the line Gemma wrote for a jump practice part.
+    const intro = first
+      ? name
+        ? `Hi ${name}! Listen first.`
+        : 'Listen first!'
+      : t.reason === 'finish'
+        ? 'Last one!'
+        : t.reason === 'jumps'
+          ? t.phrase.tip || t.phrase.nickname
+          : ''
+    if (intro) {
+      if (!first) setBubble(intro)
+      say(intro)
+      await sleep(Math.max(1100, intro.length * 70))
     }
     if (token !== phaseToken.current) return
     replaying.current = true
@@ -224,9 +259,10 @@ export function Play({ songId: initialSong, autostart }: { songId?: string; auto
     presentNote()
   }
 
-  const beginPhrase = (song: ApiSong, phraseIdx: number, probs: number[] | null) => {
+  const beginPhrase = (song: ApiSong, phraseIdx: number, probs: number[] | null, reason: Drill['reason']) => {
     const s = session.current!
     const phrase = song.phrases[phraseIdx]
+    s.partStart = performance.now()
     noteProbs.current = probs
     run.current = createPhraseRun({
       sessionId: s.id,
@@ -238,7 +274,7 @@ export function Play({ songId: initialSong, autostart }: { songId?: string; auto
       helpLevel,
       predicted: probs,
     })
-    setTurn({ song, phraseIdx, phrase })
+    setTurn({ song, phraseIdx, phrase, reason })
     setProgress(0)
     setStage('playing')
     // The setup page is long; the stage must start at the top with Plink and the bars in view.
@@ -258,10 +294,14 @@ export function Play({ songId: initialSong, autostart }: { songId?: string; auto
     const s = session.current
     if (!s || !chosen) return
     try {
-      const d = await nextDrill(s.id, chosen.id)
+      // A part that probably won't fit in the time left (it would take about as long as the
+      // last one did) is the session's last: the one TabPFN expects her surest to get right.
+      const final = s.minutes * 60000 - (performance.now() - s.start) < s.lastPartMs
+      const d = await nextDrill(s.id, chosen.id, final)
       setDrill(d)
-      const song = playable.find((x) => x.id === d.song_id) ?? chosen
-      beginPhrase(song, d.phrase_idx, d.source === 'tabpfn' && song.id === d.song_id ? d.note_probs : null)
+      if (d.reason === 'finish') s.finalPart = true
+      const song = d.song ?? playable.find((x) => x.id === d.song_id) ?? chosen
+      beginPhrase(song, d.phrase_idx, d.source === 'tabpfn' && song.id === d.song_id ? d.note_probs : null, d.reason)
     } catch (e) {
       setError(`Could not reach the local server: ${e instanceof Error ? e.message : e}`)
     }
@@ -284,7 +324,16 @@ export function Play({ songId: initialSong, autostart }: { songId?: string; auto
     rememberSong(chosen.id)
     try {
       const s = await startSession(tester ? 'tester' : 'child')
-      session.current = { id: s.id, start: performance.now(), minutes: settings.session_minutes, starsBefore: null, tester }
+      session.current = {
+        id: s.id,
+        start: performance.now(),
+        minutes: settings.session_minutes,
+        starsBefore: null,
+        tester,
+        finalPart: false,
+        partStart: performance.now(),
+        lastPartMs: 0,
+      }
       getProgress()
         .then((p) => session.current && (session.current.starsBefore = p.stars))
         .catch(() => {})
@@ -363,7 +412,9 @@ export function Play({ songId: initialSong, autostart }: { songId?: string; auto
     const line = pick(praise.current)
     setBubble(line)
     const s = session.current!
-    const over = performance.now() - s.start >= s.minutes * 60000
+    s.lastPartMs = performance.now() - s.partStart
+    // A session ends on its last part, which TabPFN chose for her to get right (see goNext).
+    const over = s.finalPart
     // A sticker earned this session is revealed at the end, with the praise.
     const earned =
       over && !s.tester && s.starsBefore !== null ? newSticker(s.starsBefore, s.starsBefore + stats.firstTry + firstTry) : null
@@ -698,11 +749,7 @@ export function Play({ songId: initialSong, autostart }: { songId?: string; auto
           )}
           {drill && (
             <Chip t={drill.source === 'tabpfn' ? 4 : 1} dashed icon={drill.source === 'tabpfn' ? <BrainCircuit aria-hidden /> : <ListOrdered aria-hidden />}>
-              {drill.source === 'tabpfn'
-                ? `TabPFN pick · learned from ${drill.rows_used} notes · ${Math.round((drill.expected_success ?? 0) * 100)}% first-try chance${
-                    trickyCount ? ` · help comes sooner on ${trickyCount} tricky ${trickyCount === 1 ? 'note' : 'notes'}` : ''
-                  }`
-                : `In song order · TabPFN is still learning (${drill.rows_used} notes so far)`}
+              {drillNote(drill, trickyCount)}
             </Chip>
           )}
         </div>

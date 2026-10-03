@@ -1,5 +1,6 @@
 import os
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, create_engine, select
@@ -16,6 +17,17 @@ PASSWORD = "correct horse battery"
 def _no_gemini(monkeypatch):
     """Tests never reach Google, even with a key in .env; test_gemini fakes the API."""
     monkeypatch.setattr(config, "GEMINI_API_KEY", "")
+
+
+@pytest.fixture(autouse=True)
+def _no_gemma(monkeypatch, tmp_path):
+    """Nor a local Ollama: unless a test fakes Gemma's replies, Gemma is down and its callers fall back."""
+
+    def down(*args, **kwargs):
+        raise httpx.ConnectError("Gemma is not reachable in tests")
+
+    monkeypatch.setattr(httpx, "post", down)
+    monkeypatch.setattr(config, "GEMMA_LOG", tmp_path / "gemma.jsonl")
 
 
 @pytest.fixture
