@@ -386,6 +386,7 @@ The user asked to deploy "using as less credits usage as possible", then: "We ca
   At 0.5 CPU (`0.5c-512mb`, about $7 a month) start and sign-up drop to 2 s and 1 s; TabPFN calls don't get faster, since they wait on the API.
 - Quota: each call on the 373-row demo log costs 10k tokens. The account allows 5M a day and 20M a month (about 2,000 calls), resetting on the 1st.
 - Verified: 217 pytest with local TabPFN on the new versions; the suite without torch passes except the one test that needs a real TabPFN. Tests for the song-order fallback and for hosted calls running in parallel, each failing without its change.
-- Not done: the first real deploy, and Render's own wake-up time on the free plan.
+- Live at <https://plink-tt30.onrender.com> (user's deploy of d1b5a21). Checked end to end with a throwaway account, deleted afterwards: sign-up 4.3 s, refresh cookie (HttpOnly, Secure, `/api/auth`), Postgres, a TabPFN pick 5.9 s (80% expected), the finishing pick 4.0 s (94%), insights 5.2 s, progress 4.0 s, Ask Plink on Gemma 5.3 s, and a deleted login refused. The app's JS, CSS and mic worklet are served.
+- Not done: Render's own wake-up time after 15 idle minutes, and a session in a real browser with the mic on the live site.
 
 Tests: 217 pytest, 114 vitest. **Not committed.**
