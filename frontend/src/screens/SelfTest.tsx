@@ -21,6 +21,7 @@ export function SelfTest({ instrument, onCalibrate }: { instrument: Instrument; 
   const [trials, setTrials] = useState<Trial[]>([])
   const [running, setRunning] = useState(false)
   const [last, setLast] = useState<Match | null>(null)
+  const [ignored, setIgnored] = useState(0)
   const [error, setError] = useState('')
   const stopMic = useRef<(() => void) | null>(null)
   const count = useRef(0)
@@ -50,19 +51,25 @@ export function SelfTest({ instrument, onCalibrate }: { instrument: Instrument; 
   const start = async () => {
     setTrials([])
     setLast(null)
+    setIgnored(0)
     setError('')
     count.current = 0
     try {
       const templates = instrument.bars.map((b) => b.template!)
-      stopMic.current = await listenForStrikes(instrument.noise_floor!, (spec) => {
-        if (count.current >= total) return
-        const expected = Math.floor(count.current / cfg.selfTestStrikesPerBar)
-        count.current++
-        const m = matchSpectrum(spec, templates)
-        if (m.bar !== null) xylo.current?.flash(m.bar)
-        setLast(m)
-        setTrials((t) => [...t, { expected, got: m.bar }])
-      })
+      stopMic.current = await listenForStrikes(
+        instrument.noise_floor!,
+        (sound) => {
+          if (count.current >= total) return
+          const expected = Math.floor(count.current / cfg.selfTestStrikesPerBar)
+          count.current++
+          const m = matchSpectrum(sound.features, templates)
+          if (m.bar !== null) xylo.current?.flash(m.bar)
+          setLast(m)
+          setTrials((t) => [...t, { expected, got: m.bar }])
+        },
+        // A clap or a voice isn't a strike: it neither counts nor uses up a turn.
+        () => setIgnored((k) => k + 1),
+      )
       setRunning(true)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -146,6 +153,11 @@ export function SelfTest({ instrument, onCalibrate }: { instrument: Instrument; 
           <p className="faint small">
             Last strike: {last.bar === null ? 'unsure' : instrument.bars[last.bar].label} · match {last.score.toFixed(2)} · lead{' '}
             {last.margin.toFixed(2)}
+          </p>
+        )}
+        {ignored > 0 && (
+          <p className="faint small">
+            Ignored {ignored} {ignored === 1 ? 'sound' : 'sounds'} that weren’t bars (claps, taps, voices).
           </p>
         )}
         {error && (

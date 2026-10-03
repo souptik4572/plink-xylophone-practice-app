@@ -281,3 +281,40 @@ The user asked for a logged-in user dashboard, logout, and profile options. Thei
 - Verified: headless Chrome against a separate server, 29 checks, twice. They cover the menu (Escape, outside click, focus), the sum before both pages (in a fresh tab too), saving the name and keeping it across a reload, the logout confirmation, a wrong and a right password for deletion, the deleted login failing, and the menu and page at 390 px.
 
 Tests: 205 pytest, 97 vitest. **Not committed.**
+
+## Calibration and detection rework (Sat 3 Oct)
+
+The user reported the mic calibration "registering unwanted noise and faulty sequency mapper". Read as both senses: frequency (which bar a strike is) and sequence (calibration order). No real xylophone was on hand, so the evidence is synthetic: modelled wooden and metal bars (inharmonic 2.76×/5.4× overtones, mallet click, random strength and detune), claps, knocks, key clicks, adult and child voices, and TV babble.
+
+- Baseline, the old pipeline on those sounds:
+
+  | Old pipeline | Result |
+  | --- | --- |
+  | Claps, knocks, clicks, a child's voice | 10/10 taken as strikes |
+  | An adult's vowel | 20/10 taken as strikes |
+  | 3 s of TV babble | 10 false strikes |
+  | Bars drifted 1% since calibration | 0-24/40 |
+  | Calibrated at 48 kHz, played at 44.1 kHz | **0/40** |
+
+  The last row is a real bug: templates were raw FFT bins, whose frequencies depend on the device's sample rate. Since accounts, a calibration also travels to other devices.
+- Built:
+  - **Features on a musical scale:** quarter-semitone bands from 200 to 6000 Hz, the same at any sample rate, blurred over half a semitone. Old calibrations are refused with a "learn her bars once more" note.
+  - **A 250 Hz high-pass** before anything listens.
+  - **A strike gate.** A bar peaks at the mallet and only decays: its window level is 0.44-0.87 of the attack's. Claps, knocks and clicks are ≤0.31; voices swell to 2.0-3.2. A bar is also a few partials: ≥0.96 of its energy lies within half a semitone of its three strongest peaks, against ≤0.77 for adult voices.
+  - **A live room level:** the 20th percentile of the last 3 s replaces the calibrated noise floor after the first second. The floor is now measured as a median, so a cough while measuring doesn't count.
+  - **Calibration order.** A bar's three strikes must agree on pitch within a semitone, and each bar must be higher than the last. A jump of more than the instrument's step plus 1.5 semitones counts as a skipped bar, unless the same jump is played twice (an out-of-tune toy).
+  - **On screen:** the grown-up sees the note heard on each strike, and why a sound was ignored. The Mic check doesn't count ignored sounds.
+- After, the same sounds (31 tests):
+  - All 96 strikes accepted: wooden, metal and soft, at 44.1 and 48 kHz.
+  - Every noise rejected.
+  - TV babble stops firing once the room level adapts, and real strikes still count.
+  - 39+/40 at 48, 44.1 and 96 kHz, 38+/40 with ±1% drift, and still above the gate in a 4× noisier room.
+  - A note between two bars is "unsure".
+- Mutation checks: turning off the swell rule, the tonality check, the live room level, or the sample-rate-independent bands each fails its tests.
+- Browser, end to end: headless Chrome with a WAV file as the microphone, through the real worklet and screens. Calibration learned all 8 bars in order, with pitches C5 526 Hz to C6 1037 Hz, and ignored a clap, a spoken "okay" and a knock. The Mic check then scored **40 of 40**, with 3 claps ignored.
+- Broke:
+  - The first browser run "heard nothing": Chrome's fake-microphone flag silently ignores a path containing `..`.
+  - A mutation check passed when it shouldn't have: making the room-level window huge doesn't turn adaptation off. Pinning the floor did, and the test caught it.
+- Still open: **the real instrument.** Every number above is synthetic. Her xylophone's own overtones, the room and the laptop mic decide the real result, so the 36/40 Mic check on her xylophone (the milestone 2 gate) is still to do.
+
+Tests: 205 pytest, 114 vitest. **Not committed.**

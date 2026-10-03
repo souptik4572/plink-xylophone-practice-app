@@ -1,4 +1,5 @@
 import { audioConfig } from './audio/audioConfig'
+import { BANDS } from './audio/templates'
 
 /** One bar of her xylophone, low to high (spec 7.5). */
 export interface Bar {
@@ -17,8 +18,12 @@ export interface Instrument {
   noise_floor?: number
 }
 
+/** Templates from before the musical-scale spectra (raw FFT bins) can't be compared with today's strikes. */
 export const isCalibrated = (inst: Instrument) =>
-  inst.noise_floor !== undefined && inst.bars.every((b) => b.template?.length)
+  inst.noise_floor !== undefined && inst.bars.every((b) => b.template?.length === BANDS)
+
+/** Calibrated once, in the old format: Plink needs to learn the bars again. */
+export const needsRecalibration = (inst: Instrument) => !isCalibrated(inst) && inst.bars.some((b) => b.template?.length)
 
 /** Eight bars, C major, C to high C, in the usual toy-xylophone rainbow. */
 export const DEFAULT_INSTRUMENT: Instrument = {

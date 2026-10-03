@@ -41,7 +41,12 @@ export const audioConfig = {
   detection: {
     noiseMeasureS: 1,
     frameMs: 10,
-    /** A strike is a frame louder than max(noiseMult × noise floor, minRms)... */
+    /**
+     * Below any toy xylophone's lowest bar. Table knocks, footsteps, hum and the
+     * low end of voices are filtered out before anything listens.
+     */
+    highPassHz: 250,
+    /** A strike is a frame louder than max(noiseMult × the room's level, minRms)... */
     noiseMult: 4,
     minRms: 0.01,
     /**
@@ -51,18 +56,54 @@ export const audioConfig = {
      */
     riseRatio: 1.3,
     refractoryMs: 150,
+    /**
+     * The room's level is re-measured as it plays: this quiet end of the last
+     * few seconds. A TV or a fan switched on after calibration raises the bar.
+     */
+    floorWindowS: 3,
+    floorPercentile: 0.2,
     /** Skip the mallet click before taking the spectrum. */
     skipMs: 20,
-    fftSize: 4096,
+    /** The spectrum's window, rounded to a power of two at the device's sample rate. */
+    windowMs: 85,
     minHz: 200,
     maxHz: 6000,
-    minScore: 0.8,
-    minMargin: 0.05,
+    /** Spectra live on a musical scale, the same at 44.1 or 48 kHz, so a calibration works on any device. */
+    bandsPerSemitone: 4,
+    /** A bar's pitch is its lowest peak at least this share of the strongest. */
+    pitchPeakShare: 0.5,
+    /**
+     * A struck bar peaks at the mallet and then only decays: the window's level
+     * is between these shares of the attack's (0.44-0.87 measured on synthetic
+     * wooden and metal bars). A clap, knock or key click has died away (≤0.31);
+     * a voice swells after it starts (2.0-3.2).
+     */
+    minSustain: 0.15,
+    maxSustain: 1.1,
+    /**
+     * A bar is a few partials: at least this share of its energy lies within half
+     * a semitone of its three strongest peaks (≥0.96 on synthetic bars, even soft
+     * ones in a noisy room; ≤0.77 for an adult's voice).
+     */
+    tonalPeaks: 3,
+    tonalReachSemitones: 0.5,
+    minPeakShare: 0.85,
+    /** Same bar scores ≥0.86 even 1% off its calibrated pitch; another bar ≤0.43; a note between bars ≤0.33. */
+    minScore: 0.75,
+    minMargin: 0.15,
     strikesPerBar: 3,
     /** A bar's three calibration strikes must each be this close to their average... */
     calibrateConsistency: 0.85,
+    /** ...agree on pitch within this many semitones... */
+    pitchAgreeSemitones: 1,
     /** ...and the bar no closer than this to an earlier bar, or it is redone. */
     calibrateDistinct: 0.92,
+    /**
+     * Bars are calibrated low to high, so each must sound higher than the last.
+     * A step this many semitones bigger than the instrument's own step means a
+     * bar was skipped (toy xylophones are often out of tune, so it is generous).
+     */
+    skipSlackSemitones: 1.5,
     /** The mic stays deaf this long after the app's own sound ends (room echo). */
     selfMuteTailS: 0.1,
     selfTestStrikesPerBar: 5,

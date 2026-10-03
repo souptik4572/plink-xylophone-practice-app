@@ -51,7 +51,7 @@ The Grown-ups area asks for a sum before opening, so little hands can't reach se
   - answers **Ask Plink** questions by calling tools over her data and TabPFN.
 - **Basic Pitch** (Spotify) turns singing into notes, in the browser.
 
-Detection of her real xylophone is plain signal processing, not a model.
+Detection of her real xylophone is plain signal processing, not a model. A sound only counts as a strike if it rings on after the mallet and only decays, as a few clear partials. Claps, knocks, key clicks and voices are ignored, and the room's noise level is re-measured as she plays. Calibration checks that each bar sounds higher than the last, and works across devices whatever their sample rate.
 
 ## Adding songs
 

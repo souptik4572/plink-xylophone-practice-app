@@ -1,76 +1,39 @@
 import { describe, expect, it } from 'vitest'
 import { barFrequency, DEFAULT_INSTRUMENT } from '../instrument'
 import { audioConfig } from './audioConfig'
+import { checkBar, noteName, type LearnedBar } from './calibration'
 import { confusionGrid, matchSpectrum } from './matcher'
-import { createOnsetDetector, createStrikePipeline, measureNoiseFloor } from './onset'
-import { averageTemplate, fft, spectrum } from './templates'
+import { createHighPass, createOnsetDetector, createStrikePipeline, measureNoiseFloor, type Sound } from './onset'
+import { averageTemplate, BANDS, bandHz, bandMagnitudes, features, fft, pitchHz, semitones, windowSize } from './templates'
+import { clap, click, concat, heard, hiss, knock, room, strike, vowel, type Room } from './testSounds'
 
-const SR = 48000
 const cfg = audioConfig.detection
+const base = DEFAULT_INSTRUMENT.bars.map((_, i) => barFrequency(DEFAULT_INSTRUMENT, i)) // C5–C6
+const high = base.map((f) => f * 2) // a toy glockenspiel's C6–C7
 
-// Deterministic PRNG so the synthetic tests never flake.
-function rng(seed: number) {
-  return () => {
-    seed = (seed * 1664525 + 1013904223) >>> 0
-    return seed / 2 ** 32
-  }
-}
-const rand = rng(42)
-
-/**
- * A synthetic struck bar: a decaying fundamental plus the inharmonic
- * overtones real xylophone bars have, with the strength, detune and
- * overtone balance varying from strike to strike.
- */
-function strike(freq: number, seconds = 0.4, amp = 0.5): Float32Array {
-  const out = new Float32Array(Math.round(seconds * SR))
-  const f = freq * (1 + (rand() - 0.5) * 0.006)
-  const a = amp * (0.6 + rand() * 0.8)
-  const partials = [
-    [1, 1, 6],
-    [2.76, 0.3 + rand() * 0.3, 10],
-    [5.4, 0.1 + rand() * 0.15, 16],
-  ]
-  for (let i = 0; i < out.length; i++) {
-    const t = i / SR
-    let s = 0
-    for (const [ratio, gain, decay] of partials) s += gain * Math.exp(-decay * t) * Math.sin(2 * Math.PI * f * ratio * t)
-    out[i] = a * s
-  }
-  return out
-}
-
-function noise(seconds: number, level = 0.002): Float32Array {
-  const out = new Float32Array(Math.round(seconds * SR))
-  for (let i = 0; i < out.length; i++) out[i] = (rand() * 2 - 1) * level
-  return out
-}
-
-function concat(...parts: Float32Array[]): Float32Array {
-  const out = new Float32Array(parts.reduce((n, p) => n + p.length, 0))
-  let o = 0
-  for (const p of parts) {
-    out.set(p, o)
-    o += p.length
-  }
-  return out
-}
-
-/** Mix a strike into room noise, as the mic would hear it. */
-const heard = (freq: number) => {
-  const s = strike(freq)
-  const n = noise(s.length / SR)
-  return s.map((v, i) => v + n[i])
-}
-
-const freqs = DEFAULT_INSTRUMENT.bars.map((_, i) => barFrequency(DEFAULT_INSTRUMENT, i))
-
-/** Feed a signal through the pipeline in mic-sized chunks; collect spectra. */
-function capture(signal: Float32Array, floor = 0.002) {
-  const got: Float64Array[] = []
-  const push = createStrikePipeline(SR, floor, (spec) => got.push(spec))
+/** Feed a signal through the pipeline in mic-sized chunks; collect what it heard. */
+function listen(r: Room, signal: Float32Array, floor = 0.002) {
+  const got: Sound[] = []
+  const push = createStrikePipeline(r.sr, floor, (s) => got.push(s))
   for (let i = 0; i < signal.length; i += 1024) push(signal.subarray(i, i + 1024))
   return got
+}
+
+/** One sound in a quiet room, as the pipeline hears it. */
+const hear = (r: Room, sound: Float32Array, level = 0.002) => listen(r, concat(hiss(r, 0.2, level), heard(r, sound, level), hiss(r, 0.3, level)), level)
+
+function calibrate(r: Room, freqs: number[], ring: number) {
+  return freqs.map((f) => averageTemplate(Array.from({ length: cfg.strikesPerBar }, () => hear(r, strike(r, f, { ring }))[0].features)))
+}
+
+function selfTest(r: Room, templates: number[][], freqs: number[], o: { ring: number; detune?: number; level?: number }) {
+  const trials = freqs.flatMap((f, bar) =>
+    Array.from({ length: 5 }, () => {
+      const [s] = hear(r, strike(r, f, o), o.level)
+      return { expected: bar, got: s && !s.rejected ? matchSpectrum(s.features, templates).bar : null }
+    }),
+  )
+  return confusionGrid(trials, freqs.length)
 }
 
 describe('fft', () => {
@@ -85,70 +48,178 @@ describe('fft', () => {
   })
 })
 
-describe('spectrum', () => {
-  it('keeps only the 200–6000 Hz bins and is unit length', () => {
-    const s = spectrum(strike(880).subarray(0, cfg.fftSize), SR)
-    const binHz = SR / cfg.fftSize
-    expect(s.length).toBe(Math.floor(cfg.maxHz / binHz) - Math.ceil(cfg.minHz / binHz) + 1)
-    expect(Math.hypot(...s)).toBeCloseTo(1, 6)
+describe('spectrum on a musical scale', () => {
+  const tone = (sr: number, f: number) => Float32Array.from({ length: windowSize(sr) }, (_, i) => Math.sin((2 * Math.PI * f * i) / sr))
+
+  it('has the same bands at any sample rate, so a calibration travels between devices', () => {
+    for (const sr of [44100, 48000, 96000]) {
+      for (const f of [523.25, 1046.5, 3000]) {
+        const bands = bandMagnitudes(tone(sr, f), sr)
+        expect(bands).toHaveLength(BANDS)
+        const peak = bands.indexOf(Math.max(...bands))
+        // Within a quarter semitone: at low notes the FFT bin (~0.2 semitone at C5), not the band, is the limit.
+        expect(Math.abs(semitones(f, bandHz(peak)))).toBeLessThan(0.25)
+      }
+    }
+  })
+
+  it('features are unit length', () => {
+    const f = features(bandMagnitudes(tone(48000, 880), 48000))
+    expect(Math.hypot(...f)).toBeCloseTo(1, 6)
+  })
+
+  it('reads a struck bar’s pitch from its fundamental, not its overtones', () => {
+    const r = room(48000, 3)
+    for (const f of [...base, ...high]) {
+      const [s] = hear(r, strike(r, f))
+      expect(Math.abs(semitones(f, s.pitchHz))).toBeLessThan(0.25)
+    }
+    expect(noteName(1046.5)).toBe('C6')
+    expect(noteName(554.37)).toBe('C♯5')
   })
 })
 
 describe('onset detector', () => {
+  const r = room(48000, 5)
+
   it('finds one onset per strike, ignoring the decaying tail', () => {
-    const detect = createOnsetDetector(SR, 0.002)
-    const signal = concat(noise(0.3), strike(660, 0.8), noise(0.3))
-    const onsets = detect(signal)
+    const onsets = createOnsetDetector(r.sr, 0.002)(concat(hiss(r, 0.3), strike(r, 660, { seconds: 0.8 }), hiss(r, 0.3)))
     expect(onsets).toHaveLength(1)
-    expect(Math.abs(onsets[0] - 0.3 * SR)).toBeLessThan((cfg.frameMs / 1000) * SR + 1)
+    expect(Math.abs(onsets[0] - 0.3 * r.sr)).toBeLessThan((cfg.frameMs / 1000) * r.sr + 1)
   })
 
   it('catches fast repeats on the same bar, but not within the refractory period', () => {
-    const detect = createOnsetDetector(SR, 0.002)
-    const gap = (ms: number) => strike(660, ms / 1000)
-    expect(detect(concat(noise(0.2), gap(200), gap(200), gap(200), strike(660)))).toHaveLength(4)
-    const detect2 = createOnsetDetector(SR, 0.002)
-    expect(detect2(concat(noise(0.2), gap(80), strike(660)))).toHaveLength(1)
+    const gap = (ms: number) => strike(r, 660, { seconds: ms / 1000 })
+    expect(createOnsetDetector(r.sr, 0.002)(concat(hiss(r, 0.2), gap(200), gap(200), gap(200), strike(r, 660)))).toHaveLength(4)
+    expect(createOnsetDetector(r.sr, 0.002)(concat(hiss(r, 0.2), gap(80), strike(r, 660)))).toHaveLength(1)
   })
 
-  it('stays quiet on room noise', () => {
-    expect(createOnsetDetector(SR, 0.002)(noise(2))).toHaveLength(0)
+  it('stays quiet on room noise, and below the absolute minimum', () => {
+    expect(createOnsetDetector(r.sr, 0.002)(hiss(r, 2))).toHaveLength(0)
+    const quietTap = strike(r, 660, { seconds: 0.3, amp: cfg.minRms * 0.3 })
+    expect(createOnsetDetector(r.sr, 0)(concat(new Float32Array(r.sr / 10), quietTap))).toHaveLength(0)
   })
 
-  it('never triggers below the absolute minimum, even in a silent room', () => {
-    const quietTap = strike(660, 0.3, cfg.minRms * 0.5)
-    expect(createOnsetDetector(SR, 0)(concat(new Float32Array(SR / 10), quietTap))).toHaveLength(0)
+  it('follows the room: a TV switched on after calibration stops causing strikes, real ones still count', () => {
+    // Calibrated in a quiet room, then a TV's babble of voices starts, loud but quieter than
+    // a bar struck near the mic. Two real strikes come at 2.5 s and 3.5 s.
+    const tv = room(48000, 6)
+    const babble = concat(...Array.from({ length: 16 }, (_, k) => vowel(tv, 110 + (k % 4) * 40, { amp: 0.2, seconds: 0.25 })))
+    const signal = heard(tv, babble)
+    for (const at of [2.5, 3.5]) signal.set(strike(tv, 880).map((v, i) => v + signal[Math.round(at * tv.sr) + i]), Math.round(at * tv.sr))
+    const onsets = createOnsetDetector(tv.sr, 0.002)(createHighPass(tv.sr)(signal)).map((i) => i / tv.sr)
+    // Loud enough to fire on the quiet room's threshold, before the room's own level takes over at 1 s...
+    expect(onsets.filter((t) => t < 1).length).toBeGreaterThan(0)
+    // ...and afterwards only the strikes.
+    expect(onsets.filter((t) => t > 1.5).map((t) => Math.round(t * 10) / 10)).toEqual([2.5, 3.5])
   })
 
-  it('measures the noise floor as mean frame RMS', () => {
-    expect(measureNoiseFloor(noise(1, 0.01), SR)).toBeCloseTo(0.01 / Math.sqrt(3), 3)
+  it('measures the room as the median frame level, so a clap while measuring doesn’t count', () => {
+    const quiet = measureNoiseFloor(hiss(r, 1, 0.01), r.sr)
+    expect(quiet).toBeCloseTo(0.01 / Math.sqrt(3), 3)
+    expect(measureNoiseFloor(concat(hiss(r, 0.5, 0.01), clap(r), hiss(r, 0.25, 0.01)), r.sr)).toBeLessThan(quiet * 1.2)
+  })
+})
+
+describe('strike gate', () => {
+  it('takes every struck bar: wooden and metal, loud and soft, at 44.1 and 48 kHz', () => {
+    let heardBars = 0
+    for (const sr of [44100, 48000]) {
+      const r = room(sr, 8)
+      for (const f of [...base, ...high])
+        for (const o of [{ ring: 0.07 }, { ring: 0.4 }, { ring: 0.1, amp: 0.05 }]) {
+          const got = hear(r, strike(r, f, o))
+          expect(got).toHaveLength(1)
+          if (got[0].rejected === null) heardBars++
+        }
+    }
+    expect(heardBars).toBe(2 * 16 * 3)
+  })
+
+  it('turns away claps, knocks, clicks and voices', () => {
+    const r = room(48000, 13)
+    const noises: [string, () => Float32Array, Sound['rejected'][]][] = [
+      ['clap', () => clap(r), ['short']],
+      ['knock', () => knock(r), ['short', 'noisy']],
+      ['key click', () => click(r), ['short']],
+      ['adult voice', () => vowel(r, 95 + r.rand() * 70, { formants: [500 + r.rand() * 300, 1000 + r.rand() * 800] }), ['swell', 'noisy']],
+      ['child voice', () => vowel(r, 250 + r.rand() * 100, { formants: [700 + r.rand() * 300, 1600 + r.rand() * 800] }), ['swell', 'noisy']],
+      ['child singing "ooo"', () => vowel(r, 300 + r.rand() * 60, { formants: [350, 800] }), ['swell', 'noisy']],
+    ]
+    for (const [name, make, reasons] of noises) {
+      const verdicts = Array.from({ length: 10 }, () => hear(r, make()).map((s) => s.rejected)).flat()
+      expect(verdicts.every((v) => reasons.includes(v)), `${name}: ${verdicts.join(',')}`).toBe(true)
+    }
   })
 })
 
 describe('calibrate, then match', () => {
-  const templates = freqs.map((f) =>
-    averageTemplate(Array.from({ length: cfg.strikesPerBar }, () => Array.from(capture(concat(noise(0.2), heard(f)))[0]))),
-  )
+  for (const [name, freqs, ring] of [['wooden C5–C6', base, 0.08], ['metal C6–C7', high, 0.4]] as const) {
+    const templates = calibrate(room(48000, 21), [...freqs], ring)
 
-  it('captures exactly one spectrum per strike through the pipeline', () => {
-    expect(capture(concat(noise(0.2), heard(523), heard(659), noise(0.2)))).toHaveLength(2)
+    it(`${name}: recognises 40 fresh strikes, and still does on a device at 44.1 or 96 kHz`, () => {
+      for (const sr of [48000, 44100, 96000]) expect(selfTest(room(sr, 22), templates, [...freqs], { ring }).correct).toBeGreaterThanOrEqual(39)
+    })
+
+    it(`${name}: recognises bars that drifted 1% from their calibrated pitch`, () => {
+      for (const detune of [0.01, -0.01]) expect(selfTest(room(48000, 23), templates, [...freqs], { ring, detune }).correct).toBeGreaterThanOrEqual(38)
+    })
+
+    it(`${name}: still recognises them in a noisier room`, () => {
+      expect(selfTest(room(48000, 24), templates, [...freqs], { ring, level: 0.008 }).correct).toBeGreaterThanOrEqual(cfg.selfTestGate)
+    })
+
+    it(`${name}: is unsure of a note between two of her bars`, () => {
+      const r = room(48000, 25)
+      const between = Math.sqrt(freqs[0] * freqs[1]) // C♯, a semitone from both C and D
+      expect(matchSpectrum(hear(r, strike(r, between, { ring }))[0].features, templates).bar).toBeNull()
+    })
+  }
+})
+
+describe('calibration order', () => {
+  const r = room(48000, 31)
+  const strikes = (f: number, n: number = cfg.strikesPerBar) => Array.from({ length: n }, () => hear(r, strike(r, f))[0])
+  const learn = (f: number): LearnedBar => {
+    const v = checkBar(strikes(f), [], 0)
+    if (!v.ok) throw new Error(v.problem)
+    return v.learned
+  }
+  const [C, D, E, F, G] = base
+  const learned = [learn(C), learn(D)]
+
+  it('accepts the next bar up', () => {
+    expect(checkBar(strikes(E), learned, 2)).toMatchObject({ ok: true })
   })
 
-  it('recognises 40 fresh strikes, five per bar', () => {
-    const trials = freqs.flatMap((f, bar) =>
-      Array.from({ length: 5 }, () => {
-        const [spec] = capture(concat(noise(0.2), heard(f)))
-        return { expected: bar, got: matchSpectrum(spec, templates).bar }
-      }),
-    )
-    const { correct, total } = confusionGrid(trials, freqs.length)
-    expect(total).toBe(40)
-    expect(correct).toBeGreaterThanOrEqual(cfg.selfTestGate)
+  it('accepts an out-of-tune toy: E nearly a semitone sharp', () => {
+    expect(checkBar(strikes(E * 2 ** (0.8 / 12)), learned, 2)).toMatchObject({ ok: true })
   })
 
-  it('reports unsure for a note that is not one of her bars', () => {
-    const [spec] = capture(concat(noise(0.2), heard(554.37))) // C#5, between C and D
-    expect(matchSpectrum(spec, templates).bar).toBeNull()
+  it('redoes a bar whose strikes disagree', () => {
+    expect(checkBar([...strikes(E, 2), ...strikes(G, 1)], learned, 2)).toEqual({ ok: false, problem: 'mixed' })
+  })
+
+  it('names the bar that was hit again', () => {
+    expect(checkBar(strikes(D), learned, 2)).toEqual({ ok: false, problem: 'twin', twin: 1 })
+  })
+
+  it('catches a bar lower than the last one', () => {
+    expect(checkBar(strikes(C / 2 ** (1 / 12)), learned, 2)).toMatchObject({ ok: false, problem: 'lower' })
+  })
+
+  it('catches a skipped bar, unless the same jump is heard twice', () => {
+    const first = checkBar(strikes(G), learned, 2) // G for E: F was skipped
+    expect(first).toMatchObject({ ok: false, problem: 'skipped' })
+    const trusted = checkBar(strikes(G), learned, 2, (first as { pitchHz: number }).pitchHz)
+    expect(trusted).toMatchObject({ ok: true })
+    expect(checkBar(strikes(F), learned, 2, (first as { pitchHz: number }).pitchHz)).toMatchObject({ ok: true })
+  })
+
+  it('a noise never becomes a calibration strike', () => {
+    const r2 = room(48000, 32)
+    const got = listen(r2, concat(hiss(r2, 0.2), heard(r2, clap(r2)), hiss(r2, 0.3), heard(r2, vowel(r2, 140)), hiss(r2, 0.3), heard(r2, strike(r2, E)), hiss(r2, 0.3)))
+    expect(got.filter((s) => s.rejected === null)).toHaveLength(1)
   })
 })
 
@@ -192,5 +263,15 @@ describe('confusionGrid', () => {
       [0, 1, 1],
     ])
     expect(g).toMatchObject({ correct: 2, total: 4 })
+  })
+})
+
+describe('pitch', () => {
+  it('is the lowest strong peak', () => {
+    const bands = new Float64Array(BANDS)
+    bands[40] = 1
+    bands[60] = 0.7
+    bands[80] = 0.2
+    expect(pitchHz(bands)).toBe(bandHz(40))
   })
 })

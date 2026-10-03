@@ -1,6 +1,6 @@
 import { audioConfig } from './audioConfig'
 import { matchSpectrum, type Match } from './matcher'
-import { createStrikePipeline, measureNoiseFloor } from './onset'
+import { createStrikePipeline, measureNoiseFloor, type Sound } from './onset'
 import { getAudioContext, isAppSounding } from './synth'
 import { strikeBus } from '../player/barStrike'
 import { isSpeaking } from '../voice'
@@ -66,14 +66,17 @@ export async function recordNoiseFloor(): Promise<number> {
 }
 
 /**
- * Listens for strikes and hands each one's spectrum to `onSpectrum`. While the
- * app itself is making sound or speaking, strikes are dropped (self-mute).
+ * Listens for strikes: each struck bar goes to `onStrike`, and each sound the
+ * gate turned away (a clap, a knock, a voice) to `onIgnored`. While the app
+ * itself is making sound or speaking, everything is dropped (self-mute).
  */
-export async function listenForStrikes(noiseFloor: number, onSpectrum: (spec: Float64Array) => void) {
+export async function listenForStrikes(noiseFloor: number, onStrike: (s: Sound) => void, onIgnored?: (s: Sound) => void) {
   let push: ((s: Float32Array) => void) | null = null
   const mic = await openMic((s) => push?.(s))
-  push = createStrikePipeline(mic.sampleRate, noiseFloor, (spec) => {
-    if (!isAppSounding(cfg.selfMuteTailS) && !isSpeaking()) onSpectrum(spec)
+  push = createStrikePipeline(mic.sampleRate, noiseFloor, (sound) => {
+    if (isAppSounding(cfg.selfMuteTailS) || isSpeaking()) return
+    if (sound.rejected) onIgnored?.(sound)
+    else onStrike(sound)
   })
   return mic.close
 }
@@ -83,8 +86,8 @@ export async function listenForStrikes(noiseFloor: number, onSpectrum: (spec: Fl
  * stream with source 'mic'. `onMatch` also sees unsure strikes.
  */
 export function listenForBars(noiseFloor: number, templates: number[][], onMatch?: (m: Match) => void) {
-  return listenForStrikes(noiseFloor, (spec) => {
-    const m = matchSpectrum(spec, templates)
+  return listenForStrikes(noiseFloor, (sound) => {
+    const m = matchSpectrum(sound.features, templates)
     onMatch?.(m)
     if (m.bar !== null) strikeBus.emit({ bar: m.bar, source: 'mic', t: performance.now() })
   })
