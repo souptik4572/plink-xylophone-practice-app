@@ -70,14 +70,15 @@ TabPFN-3 weights are open-weight under a **non-commercial** licence and need a o
 
 Her copy runs on the family laptop. The public demo runs on [Render](https://render.com) from [render.yaml](render.yaml), with the same open models:
 
-- **`plink`** (web service) serves the built app and the API from one container. TabPFN's weights live on a 1 GB disk. Render's HTTPS counts as a secure context, so the microphone works from a phone or tablet too.
+- **`plink`** (web service) serves the built app and the API from one container, on Render's free plan in Frankfurt. It sleeps after 15 minutes without visitors, and the next visit takes about a minute to wake it. Render's HTTPS counts as a secure context, so the microphone works from a phone or tablet too.
 - **`plink-db`** (Render Postgres) holds the accounts and each one's practice. It takes no connections from outside Render. It is on the free plan, which Render deletes 30 days after creation.
 - **Gemma 4** runs on Google's [Gemini API](https://ai.google.dev/gemma/docs/core/gemma_on_gemini_api), not on Render: `gemma-4-26b-a4b-it` (`GEMINI_MODEL`). With `GEMINI_API_KEY` set, the backend sends Gemma's requests there instead of to Ollama.
+- **TabPFN-3** runs on Prior Labs' [hosted API](https://github.com/PriorLabs/tabpfn-client) (`TABPFN_CLOUD=true`), not on Render, so the image carries no PyTorch. The laptop keeps running it locally.
 - Each new account starts with **simulated** practice ([eval/seed_demo.py](backend/eval/seed_demo.py)), so TabPFN has a log to learn from on the first visit. Those numbers are invented, not hers.
 
-Audio still never leaves the browser tab. On the demo, what Gemma reads goes to Google's Gemini API: song-card photos, the practice numbers behind a parent note, and Ask Plink questions. The demo's server stores no photo.
+Audio still never leaves the browser tab. On the demo, what Gemma reads goes to Google's Gemini API: song-card photos, the practice numbers behind a parent note, and Ask Plink questions. The demo's server stores no photo. The practice log TabPFN learns from goes to Prior Labs' API.
 
-To run the demo in your own Render account, use [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/souptik4572/pling-xylophone-practice-app) and paste a `TABPFN_TOKEN` (see the TabPFN licence above) and a `GEMINI_API_KEY` from [Google AI Studio](https://aistudio.google.com/apikey). Render creates the database and `JWT_SECRET` itself.
+To run the demo in your own Render account, use [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/souptik4572/plink-xylophone-practice-app) and paste a `TABPFN_TOKEN` (an API key from [platform.priorlabs.ai](https://platform.priorlabs.ai/account/api-keys)) and a `GEMINI_API_KEY` from [Google AI Studio](https://aistudio.google.com/apikey). Render creates the database and `JWT_SECRET` itself.
 
 ## Licences and credits
 

@@ -75,7 +75,7 @@ def health() -> dict:
             gemma = config.GEMMA_MODEL in names
         except httpx.HTTPError:
             gemma = False
-    tabpfn = importlib.util.find_spec("tabpfn") is not None
+    tabpfn = importlib.util.find_spec("tabpfn_client" if config.TABPFN_CLOUD else "tabpfn") is not None
     return {"ok": True, "gemma": gemma, "gemma_model": config.GEMMA_MODEL, "tabpfn": tabpfn}
 
 

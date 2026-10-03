@@ -1,10 +1,12 @@
 # Plink's public demo on Render. Her own copy runs on the family laptop (`make dev`).
-# The app and API share one web service. Gemma 4 runs on Google's Gemini API, not
-# on Render. Logins and each user's practice live in Render Postgres.
+# The app and API share one web service. Gemma 4 runs on Google's Gemini API and TabPFN
+# on Prior Labs' API, not on Render. Logins and each user's practice live in Render Postgres.
 databases:
   # Free: Render deletes it 30 days after creation (plus 14 days' grace), with no backups.
   - name: plink-db
     plan: free
+    # Next to TabPFN's API (Google Cloud, Netherlands): a pick makes several round trips there.
+    region: frankfurt
     # No connections from outside Render; the web service reaches it over the private network.
     ipAllowList: []
 
@@ -12,14 +14,11 @@ services:
   - type: web
     name: plink
     runtime: docker
-    # TabPFN peaked at 2 GB on 1c-2g and 1.7 GB here, at 3-5 s per pick.
-    plan: 2c-4g
+    region: frankfurt
+    # Free: with both models on APIs, the app peaks well under the plan's 512 MB. It sleeps
+    # after 15 minutes without visitors, and the next visit waits about a minute.
+    plan: free
     healthCheckPath: /api/health
-    # TabPFN's weights, kept between deploys.
-    disk:
-      name: plink-data
-      mountPath: /data
-      sizeGB: 1
     envVars:
       - key: DATABASE_URL
         fromDatabase:
@@ -38,14 +37,15 @@ services:
       # Asked for when the Blueprint is created: a Gemini API key from Google AI Studio.
       - key: GEMINI_API_KEY
         sync: false
-      # The container sees every CPU on the host but may use only the plan's 2. With a
-      # thread per visible CPU, torch was throttled into 7x slower picks in testing.
-      - key: OMP_NUM_THREADS
-        value: "2"
+      # TabPFN on Prior Labs' API (tabpfn-client), so the image carries no torch. On the
+      # 373-row demo log each call costs 10k tokens; a free account gets 5M a day, 20M a month.
+      - key: TABPFN_CLOUD
+        value: "true"
+      # The API's default is v3.5; the spec asks for TabPFN-3, as on the laptop.
       - key: TABPFN_MODEL_VERSION
         value: v3
-      - key: TABPFN_MODEL_CACHE_DIR
-        value: /data/tabpfn
-      # Asked for when the Blueprint is created: a Prior Labs key whose account accepted the TabPFN-3 licence.
+      - key: TABPFN_DISABLE_TELEMETRY
+        value: "1"
+      # Asked for when the Blueprint is created: an API key from platform.priorlabs.ai/account/api-keys.
       - key: TABPFN_TOKEN
         sync: false

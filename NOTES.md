@@ -358,3 +358,34 @@ Asked for more AI ideas, the user picked three of four: "Let us target #1, #2 an
 - Verified: headless Chrome played a whole 2-minute session on a seeded demo account against a separate server, tapping each glowing bar. Practice parts came 4th, 8th and 12th, each with Gemma's line. Part 14, starting at the 2-minute mark, was "Last one!": TabPFN's surest part at a 94% first-try chance (its usual picks were 88-92%), and it ended the session.
 
 Tests: 215 pytest, 114 vitest. **Not committed.**
+
+## The Render demo on the free plan, with TabPFN on Prior Labs' API (Sat 3 Oct)
+
+The user asked to deploy "using as less credits usage as possible", then: "We can use the TabPFN cloud hosted using its API_KEY". The web service was `2c-4g` (about $75 a month) only because local TabPFN needed 1.7–2 GB; Render's free plan has 512 MB and 0.1 CPU.
+
+- Built:
+  - `TABPFN_CLOUD=true` (Render only) sends every TabPFN fit and predict to Prior Labs' API through `tabpfn-client`, with the same `TABPFN_TOKEN` and the same `TABPFN_MODEL_VERSION=v3` (the API's default is v3.5). The laptop keeps local TabPFN and stays offline.
+  - `tabpfn` and `torch` moved to a `local` dependency group that uv installs by default; the Docker image skips it (`--no-default-groups`). The image went from 2.06 to 1.18 GB, with no PyTorch.
+  - `render.yaml`: plan `free`, no disk (the weights are gone; free services can't have one), `region: frankfurt` for both the service and the database, and the Prior Labs client's telemetry turned off.
+  - If TabPFN fails (network, the day's API quota), the drill picker plays the song in order instead of failing the request.
+- Broke:
+  - `tabpfn-client` 0.6.1 caps pandas at 2.3.3, so pandas went from 3.0.6 to 2.3.3 on the laptop too (scikit-learn 1.9.1 → 1.9.0, pydantic 2.13.5 → 2.13.4). All tests pass on them.
+  - **The first pick took 65.6 s** at 0.1 CPU: importing the client takes 30.7 s there (`sklearn.datasets` alone 15 s). The startup warm-up now imports it and checks the key, with no API call, so it costs no quota.
+  - The process-wide TabPFN lock (for PyTorch's Mac GPU deadlock) queued API calls behind each other, so a session's first pick waited for the tricky-jumps refresh. Hosted calls skip the lock; 3 calls in parallel took 6.8 s in total and gave identical answers.
+  - One API call out of about 15 took 89 s; the rest took 4.3–7.4 s from here, of which the server's own work was about 2 s. `api.priorlabs.ai` is on Google Cloud in the Netherlands, hence Frankfurt.
+- Numbers, in Docker on this Mac, limited to the free plan's 0.1 CPU and 512 MB, on a seeded demo account:
+
+  | Step | Time |
+  | --- | --- |
+  | Start to healthy | 26 s |
+  | Sign-up (Argon2 + 373 simulated rows) | 8.1 s |
+  | A session's first pick | 7.8 s (TabPFN, 80% expected) |
+  | Insights / progress | 6.5 s / 4.2 s |
+  | Peak memory | 234 MB, no OOM |
+
+  At 0.5 CPU (`0.5c-512mb`, about $7 a month) start and sign-up drop to 2 s and 1 s; TabPFN calls don't get faster, since they wait on the API.
+- Quota: each call on the 373-row demo log costs 10k tokens. The account allows 5M a day and 20M a month (about 2,000 calls), resetting on the 1st.
+- Verified: 217 pytest with local TabPFN on the new versions; the suite without torch passes except the one test that needs a real TabPFN. Tests for the song-order fallback and for hosted calls running in parallel, each failing without its change.
+- Not done: the first real deploy, and Render's own wake-up time on the free plan.
+
+Tests: 217 pytest, 114 vitest. **Not committed.**

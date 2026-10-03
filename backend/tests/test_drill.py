@@ -94,6 +94,15 @@ def test_cold_start_under_60_rows_walks_song_order():
     assert (p.phrase_idx, p.source, p.expected_success) == (1, "fallback", None)
 
 
+def test_tabpfn_failing_walks_song_order():
+    class DownModel(JumpModel):
+        def fit(self, X, y):
+            raise RuntimeError("The day's API quota is used up")
+
+    p = pick(history(200), cands(SMOOTH, JUMPY, REPEAT), last=("song", 0), model=DownModel)
+    assert (p.phrase_idx, p.source, p.expected_success) == (1, "fallback", None)
+
+
 def test_cold_start_with_one_class_only():
     p = pick(history(200, both_classes=False), cands(SMOOTH, JUMPY, REPEAT), last=None, model=JumpModel)
     assert (p.phrase_idx, p.source) == (0, "fallback")
@@ -165,12 +174,15 @@ def test_target_is_a_parent_setting():
     assert pick(history(200), cands(JUMPY, SMOOTH, REPEAT), last=None, model=JumpModel, target=0.80).phrase_idx == 1
 
 
-def test_tabpfn_is_never_used_by_two_threads_at_once():
+@pytest.mark.parametrize("cloud", [False, True])
+def test_local_tabpfn_is_never_used_by_two_threads_at_once(cloud, monkeypatch):
     """PyTorch's GPU backend deadlocked with concurrent first use (three threads stuck
-    compiling a Metal kernel), so every TabPFN fit and predict is serialised."""
+    compiling a Metal kernel), so every local TabPFN fit and predict is serialised.
+    Calls to the hosted API run side by side."""
     import threading
     import time
 
+    monkeypatch.setattr(config, "TABPFN_CLOUD", cloud)
     inside, peak = [0], [0]
     guard = threading.Lock()
 
@@ -191,4 +203,4 @@ def test_tabpfn_is_never_used_by_two_threads_at_once():
         t.start()
     for t in threads:
         t.join()
-    assert peak[0] == 1
+    assert (peak[0] > 1) == cloud

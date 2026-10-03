@@ -11,7 +11,7 @@ FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_NO_CACHE=1 PATH="/app/backend/.venv/bin:$PATH"
 WORKDIR /app/backend
 COPY backend/pyproject.toml backend/uv.lock backend/.python-version ./
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen --no-default-groups
 COPY backend/ ./
 COPY frontend/src/songs/builtin.json /app/frontend/src/songs/
 COPY --from=app /app/frontend/dist /app/frontend/dist

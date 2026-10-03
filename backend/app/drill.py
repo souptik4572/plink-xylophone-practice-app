@@ -1,5 +1,6 @@
 """TabPFN drill picker: fit, predict, choose, cold start (spec 7.9)."""
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -43,19 +44,26 @@ class Pick:
 
 # PyTorch's GPU (MPS) backend deadlocked when several threads first used a kernel
 # at once (three request threads stuck in MetalShaderLibrary::exec_unary_kernel),
-# so every TabPFN fit and predict in this process runs under this one lock.
+# so every TabPFN fit and predict in this process runs under this one lock. Calls to
+# the hosted API skip it: they can't deadlock, and it would queue each pick behind another's.
 _tabpfn_lock = threading.Lock()
 
 
 def fit_predict(model, X_train: pd.DataFrame, y: pd.Series, X: pd.DataFrame) -> np.ndarray:
     """P(right first time) for each row of X, from a model fitted on her history."""
-    with _tabpfn_lock:
+    with contextlib.nullcontext() if config.TABPFN_CLOUD else _tabpfn_lock:
         m = model().fit(X_train, y)
         return m.predict_proba(X)[:, list(m.classes_).index(1)]
 
 
 def tabpfn_model():
-    from tabpfn import TabPFNClassifier  # imported late: app.config must load .env first
+    if config.TABPFN_CLOUD:
+        from tabpfn_client import TabPFNClassifier  # imported late: app.config must load .env first
+
+        if config.TABPFN_MODEL_VERSION:
+            return TabPFNClassifier.create_default_for_version(config.TABPFN_MODEL_VERSION)
+    else:
+        from tabpfn import TabPFNClassifier
 
     return TabPFNClassifier()
 
@@ -89,13 +97,19 @@ def pick(
     keys = [(c.song_id, c.phrase_idx) for c in cands]
     last_i = keys.index(last) if last in keys else None
 
-    if cold_start(history):
+    proba = None
+    if not cold_start(history):
+        t = time.perf_counter()
+        try:
+            # Looked up when called, not when defined, so tests can stand a simpler model in for TabPFN.
+            proba = fit_predict(model or tabpfn_model, history[FEATURES], history[LABEL].astype(int), pd.concat([c.rows for c in cands], ignore_index=True))
+        except Exception:
+            # Hosted TabPFN can fail (network, the day's API quota); song order keeps her playing.
+            log.exception("TabPFN failed; picking in song order")
+    if proba is None:
         i = 0 if last_i is None else (last_i + 1) % len(cands)
         return Pick(cands[i].song_id, cands[i].phrase_idx, "fallback", None, rows_used=len(history))
 
-    t = time.perf_counter()
-    # Looked up when called, not when defined, so tests can stand a simpler model in for TabPFN.
-    proba = fit_predict(model or tabpfn_model, history[FEATURES], history[LABEL].astype(int), pd.concat([c.rows for c in cands], ignore_index=True))
     per_note, at = [], 0
     for c in cands:
         per_note.append([float(x) for x in proba[at : at + len(c.rows)]])
@@ -369,6 +383,14 @@ def refresh(engine: Engine, user_id: int, session_id: int, song_id: str | None) 
 def warm_up() -> None:
     """Load TabPFN's weights once at startup so the first real pick is not the slow one."""
     try:
+        if config.TABPFN_CLOUD:
+            import tabpfn_client
+
+            # No weights to load, and a pick would spend API quota. Importing the client and
+            # checking the key took 30 s on Render's free 0.1 CPU, ahead of the first pick.
+            tabpfn_client.init()
+            log.info("TabPFN client ready")
+            return
         from tabpfn import TabPFNClassifier
 
         X = pd.DataFrame({"a": [0, 1, 0, 1] * 5})

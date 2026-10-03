@@ -39,6 +39,11 @@ HOME_LANGUAGE = os.getenv("HOME_LANGUAGE", "English")
 SPEECH_LANG = os.getenv("SPEECH_LANG", "")
 
 # Drill picker (spec 7.9)
+# Set on Render: TabPFN runs on Prior Labs' API (tabpfn-client, with the same TABPFN_TOKEN),
+# so the web service needs no torch. Off, it runs on this machine and her data stays here.
+TABPFN_CLOUD = os.getenv("TABPFN_CLOUD", "false").lower() in ("1", "true", "yes")
+# The local library reads this itself; the API needs it passed. Empty: each one's default.
+TABPFN_MODEL_VERSION = os.getenv("TABPFN_MODEL_VERSION", "")
 DRILL_TARGET = float(os.getenv("DRILL_TARGET", "0.80"))
 # Spec 7.9 said 60 rows. TabPFN is built for tiny tables, so it starts as soon
 # as there are 20 rows holding at least a few hits and a few misses to learn from.
